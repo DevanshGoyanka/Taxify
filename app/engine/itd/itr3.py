@@ -817,104 +817,46 @@ def _parta_bs(typed_input: ITR3Input | None = None) -> dict:
 # ============================================================================
 
 def _parta_pl(typed_input: ITR3Input | None = None) -> dict:
-    """Build PARTA_PL from typed workspace totals with schema-complete defaults."""
+    """Build schema-complete PARTA_PL, preserving every sourced disclosure."""
     pl = typed_input.profit_and_loss if typed_input is not None else None
-    _obj = {"NonResOtherCompany": 0, "Others": 0, "Total": 0}
-    result: dict[str, Any] = {
-        "GrossProfit": _to_rupees(pl.gross_profit if pl else Decimal("0")),
-        "Expenditure": _to_rupees(pl.expenditure if pl else Decimal("0")),
-        "NetIncomeFrmSpecActivity": _to_rupees(pl.net_income_from_special_activity if pl else Decimal("0")),
-        "TurnverFrmSpecActivity": _to_rupees(pl.turnover_from_special_activity if pl else Decimal("0")),
-    }
-    # Preserve the official nested shape while replacing the mapped P&L values.
-    result.update({
-        "GoodsDtlsUs44AE": [],
-        "GrossProfit": _to_rupees(pl.gross_profit if pl else Decimal("0")),
-        "NetIncomeFrmSpecActivity": _to_rupees(pl.net_income_from_special_activity if pl else Decimal("0")),
-        "NoBooksOfAccPL": {
-            "GrossReceipt": _to_rupees(pl.no_books_gross_receipt if pl else Decimal("0")),
-            "GrsRcptAccPayeeOrBankMode": 0, "GrsRcptOtherMode": 0,
-            "GrossProfit": _to_rupees(pl.no_books_gross_profit if pl else Decimal("0")),
-            "Expenses": _to_rupees(pl.no_books_expenses if pl else Decimal("0")),
-            "NetProfit": _to_rupees(pl.no_books_net_profit if pl else Decimal("0")),
-            "GrossReceiptPrf": 0, "GrsRcptAccPayeeOrBankModePrf": 0,
-            "GrsRcptOtherModePrf": 0, "GrossProfitPrf": 0,
-            "ExpensesPrf": 0, "NetProfitPrf": 0, "TotBusinessProfession": 0,
-        },
-        "TaxProvAppr": {
-            "ProvForCurrTax": _to_rupees(pl.provision_current_tax if pl else Decimal("0")),
-            "ProvDefTax": _to_rupees(pl.provision_deferred_tax if pl else Decimal("0")),
-            "ProfitAfterTax": _to_rupees(pl.profit_after_tax if pl else Decimal("0")),
-            "BalBFPrevYr": 0, "AmtAvlAppr": 0, "TrfToReserves": 0,
-            "ProprietorAccBalTrf": 0,
-        },
-        "TurnverFrmSpecActivity": _to_rupees(pl.turnover_from_special_activity if pl else Decimal("0")),
-        "Expenditure": _to_rupees(pl.expenditure if pl else Decimal("0")),
-        "CreditsToPL": {
-            "OthIncome": {
-                "RentInc": _to_rupees(pl.other_income_breakdown.rent_income if pl else Decimal("0")),
-                "Comissions": _to_rupees(pl.other_income_breakdown.commissions if pl else Decimal("0")),
-                "Dividends": _to_rupees(pl.other_income_breakdown.dividends if pl else Decimal("0")),
-                "InterestInc": _to_rupees(pl.other_income_breakdown.interest_income if pl else Decimal("0")),
-                "ProfitOnSaleFixedAsset": _to_rupees(pl.other_income_breakdown.profit_on_sale_fixed_asset if pl else Decimal("0")),
-                "ProfitOnInvChrSTT": _to_rupees(pl.other_income_breakdown.profit_on_investment_stt if pl else Decimal("0")),
-                "ProfitOnOthInv": _to_rupees(pl.other_income_breakdown.profit_on_other_investment if pl else Decimal("0")),
-                "ProfitOnCurrFluct": _to_rupees(pl.other_income_breakdown.profit_on_currency_fluctuation if pl else Decimal("0")),
-                "ProfitOnCnvInvntryToCapAsst": _to_rupees(pl.other_income_breakdown.profit_on_inventory_conversion if pl else Decimal("0")),
-                "ProfitOnAgriIncome": _to_rupees(pl.other_income_breakdown.profit_on_agricultural_income if pl else Decimal("0")),
-                "LiabilityWrittenBack": 0, "AmtofInterest": 0, "AmtofRem": 0,
-                "MiscOthIncome": _to_rupees(pl.other_income_breakdown.miscellaneous_income if pl else Decimal("0")),
-                "TotOthIncome": _to_rupees(pl.other_income if pl else Decimal("0")),
-            },
-            "GrossProfitTrnsfFrmTrdAcc": _to_rupees(pl.gross_profit_from_trading if pl else Decimal("0")),
-            "TotCreditsToPL": _to_rupees(pl.total_credits if pl else Decimal("0")),
-        },
-        "DebitsToPL": {
-            "Freight": 0, "ConsumptionOfStores": 0, "PowerFuel": 0,
-            "RentExpdr": 0, "RepairsBldg": 0, "RepairMach": 0,
-            "EmployeeComp": {
-                "SalsWages": 0, "Bonus": 0, "MedExpReimb": 0, "LeaveEncash": 0,
-                "LeaveTravelBenft": 0, "ContToSuperAnnFund": 0, "ContToPF": 0,
-                "ContToGratFund": 0, "ContToOthFund": 0, "OthEmpBenftExpdr": 0,
-                "TotEmployeeComp": 0,
-            },
-            "Insurances": {"MedInsur": 0, "LifeInsur": 0, "KeyManInsur": 0, "OthInsur": 0, "TotInsurances": 0},
-            "StaffWelfareExp": 0, "Entertainment": 0, "Hospitality": 0,
-            "Conference": 0, "SalePromoExp": 0, "Advertisement": 0,
-            "CommissionExpdrDtls": _obj, "RoyalityDtls": _obj, "ProfessionalConstDtls": _obj,
-            "HotelBoardLodge": 0, "TravelExp": 0, "ForeignTravelExp": 0,
-            "ConveyanceExp": 0, "TelephoneExp": 0, "GuestHouseExp": 0,
-            "ClubExp": 0, "FestivalCelebExp": 0, "Scholarship": 0,
-            "Gift": 0, "Donation": 0,
-            "RatesTaxesPays": {
-                "ExciseCustomsVAT": {
-                    "UnionExciseDuty": 0, "ServiceTax": 0, "VATorSaleTax": 0,
-                    "CentralGoodServiceTax": 0, "StateGoodServiceTax": 0,
-                    "IntegratedGoodServiceTax": 0, "UnionTerrGoodServiceTax": 0,
-                    "OthDutyTaxCess": 0, "Cess": 0, "TotExciseCustomsVAT": 0,
-                },
-            },
-            "AuditFee": 0, "OtherExpensesDtls": [], "OtherExpenses": _to_rupees(pl.total_expenses if pl else Decimal("0")),
-            "BadDebtDtls": {
-                "BadDebt": 0,
-                "BadDebtAmtDtls": [],
-                "BadDebtAmtDtlsTotal": 0,
-                "OthersAmtLt1Lakh": 0,
-                "OthersPANNotAvlblDtl": [],
-                "OthersPANNotAvlblDtlTotal": 0,
-            },
-            "ProvForBadDoubtDebt": 0, "OthProvisionsExpdr": 0,
-            "PBIDTA": _to_rupees(pl.pbidta if pl else Decimal("0")),
-            "InterestExpdrtDtls": {
-                "InterestExpdr": _to_rupees(pl.interest_expense.total if pl else Decimal("0")),
-                "NonResOtherCompany": _to_rupees(pl.interest_expense.non_resident_or_other_company if pl else Decimal("0")),
-                "Others": _to_rupees(pl.interest_expense.others if pl else Decimal("0")),
-            },
-            "DepreciationAmort": _to_rupees(pl.depreciation_amortization if pl else Decimal("0")),
-            "PBT": _to_rupees(pl.profit_before_tax if pl else Decimal("0")),
-        },
-    })
-    return result
+    if pl is None:
+        return _parta_pl_defaults()
+    result = _official_integer_tree(pl.part_a.model_dump(by_alias=True, exclude_none=True))
+    result["GrossProfit"] = _to_rupees(pl.gross_profit)
+    result["Expenditure"] = _to_rupees(pl.expenditure)
+    result["NetIncomeFrmSpecActivity"] = _to_rupees(pl.net_income_from_special_activity)
+    result["TurnverFrmSpecActivity"] = _to_rupees(pl.turnover_from_special_activity)
+    return _parta_pl_defaults(result)
+
+
+def _parta_pl_defaults(existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Fill mandatory PARTA_PL blocks without overwriting supplied disclosures."""
+    result = dict(existing or {})
+    result.setdefault("CreditsToPL", {"OthIncome": {}, "TotCreditsToPL": 0})
+    result.setdefault("DebitsToPL", {})
+    result.setdefault("TaxProvAppr", {})
+    result.setdefault("NoBooksOfAccPL", {})
+    credits = result["CreditsToPL"]; debits = result["DebitsToPL"]
+    credits.setdefault("OthIncome", {})
+    other = credits["OthIncome"]
+    for key in ("RentInc","Comissions","Dividends","InterestInc","ProfitOnSaleFixedAsset","ProfitOnInvChrSTT","ProfitOnOthInv","ProfitOnCurrFluct","ProfitOnCnvInvntryToCapAsst","ProfitOnAgriIncome","MiscOthIncome","TotOthIncome"):
+        other.setdefault(key, 0)
+    credits.setdefault("TotCreditsToPL", 0)
+    for key in ("GrossProfitTrnsfFrmTrdAcc",): credits.setdefault(key, 0)
+    employee = debits.setdefault("EmployeeComp", {}); insurance = debits.setdefault("Insurances", {})
+    for key in ("SalsWages","Bonus","MedExpReimb","LeaveEncash","LeaveTravelBenft","ContToSuperAnnFund","ContToPF","ContToGratFund","ContToOthFund","OthEmpBenftExpdr","TotEmployeeComp"): employee.setdefault(key, 0)
+    for key in ("MedInsur","LifeInsur","KeyManInsur","OthInsur","TotInsurances"): insurance.setdefault(key, 0)
+    for key in ("CommissionExpdrDtls","RoyalityDtls","ProfessionalConstDtls","InterestExpdrtDtls"):
+        block = debits.setdefault(key, {})
+        for child in ("NonResOtherCompany","Others","Total") if key != "InterestExpdrtDtls" else ("NonResOtherCompany","Others","InterestExpdr"):
+            block.setdefault(child, 0)
+    for key in ("RatesTaxesPays",): debits.setdefault(key, {"ExciseCustomsVAT": {}}); debits[key].setdefault("ExciseCustomsVAT", {})
+    for key in ("Freight","ConsumptionOfStores","PowerFuel","RentExpdr","RepairsBldg","RepairMach","StaffWelfareExp","Entertainment","Hospitality","Conference","SalePromoExp","Advertisement","HotelBoardLodge","TravelExp","ForeignTravelExp","ConveyanceExp","TelephoneExp","GuestHouseExp","ClubExp","FestivalCelebExp","Scholarship","Gift","Donation","AuditFee","OtherExpenses","ProvForBadDoubtDebt","OthProvisionsExpdr","PBIDTA","DepreciationAmort","PBT"): debits.setdefault(key, 0)
+    no_books = result["NoBooksOfAccPL"]
+    for key in ("GrossReceipt","GrsRcptAccPayeeOrBankMode","GrsRcptOtherMode","GrossProfit","Expenses","NetProfit","GrossReceiptPrf","GrsRcptAccPayeeOrBankModePrf","GrsRcptOtherModePrf","GrossProfitPrf","ExpensesPrf","NetProfitPrf","TotBusinessProfession"): no_books.setdefault(key, 0)
+    tax = result["TaxProvAppr"]
+    for key in ("ProvForCurrTax","ProvDefTax","ProfitAfterTax","BalBFPrevYr","AmtAvlAppr","TrfToReserves","ProprietorAccBalTrf"): tax.setdefault(key, 0)
+    return _official_integer_tree(result)
 
 
 def _manufacturing_account(typed_input: ITR3Input | None = None) -> dict:

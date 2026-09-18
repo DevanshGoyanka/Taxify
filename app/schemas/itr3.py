@@ -32,7 +32,7 @@ from enum import Enum
 from typing import List, Optional, Any, Literal
 from datetime import date
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, PrivateAttr
 
 from app.schemas.itr1 import (
     AgeBracket, TaxRegime,
@@ -421,56 +421,438 @@ class ITR3BusinessAccounts(BaseModel):
     trading_account: Optional[TradingAccount] = Field(default=None)
 
 
-class PLOtherIncome(BaseModel):
-    """Typed PARTA_PL other-income credit breakdown."""
+# ---------------------------------------------------------------------------
+# PARTA_PL official typed disclosure models
+# ---------------------------------------------------------------------------
+class PLPLPLPLPartACreditsToPLOthIncomeOtherIncDtlsRow(BaseModel):
+    """Typed official PARTA_PL PLPLPLPLPartACreditsToPLOthIncomeOtherIncDtlsRow disclosure block."""
+    NatureOfIncome: Optional[str] = Field(default=None, alias='NatureOfIncome')
+    Amount: Decimal = Field(default=Decimal("0"), alias='Amount', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    rent_income: Decimal = Field(default=Decimal("0"), alias="RentInc", ge=0)
-    commissions: Decimal = Field(default=Decimal("0"), alias="Comissions", ge=0)
-    dividends: Decimal = Field(default=Decimal("0"), alias="Dividends", ge=0)
-    interest_income: Decimal = Field(default=Decimal("0"), alias="InterestInc", ge=0)
-    profit_on_sale_fixed_asset: Decimal = Field(default=Decimal("0"), alias="ProfitOnSaleFixedAsset", ge=0)
-    profit_on_investment_stt: Decimal = Field(default=Decimal("0"), alias="ProfitOnInvChrSTT", ge=0)
-    profit_on_other_investment: Decimal = Field(default=Decimal("0"), alias="ProfitOnOthInv", ge=0)
-    profit_on_currency_fluctuation: Decimal = Field(default=Decimal("0"), alias="ProfitOnCurrFluct", ge=0)
-    profit_on_inventory_conversion: Decimal = Field(default=Decimal("0"), alias="ProfitOnCnvInvntryToCapAsst", ge=0)
-    profit_on_agricultural_income: Decimal = Field(default=Decimal("0"), alias="ProfitOnAgriIncome", ge=0)
-    miscellaneous_income: Decimal = Field(default=Decimal("0"), alias="MiscOthIncome", ge=0)
-    total: Decimal = Field(default=Decimal("0"), alias="TotOthIncome", ge=0)
+class PLPLPLPartACreditsToPLOthIncome(BaseModel):
+    """Typed official PARTA_PL PLPLPLPartACreditsToPLOthIncome disclosure block."""
+    RentInc: Decimal = Field(default=Decimal("0"), alias='RentInc', ge=0, le=99999999999999)
+    Comissions: Decimal = Field(default=Decimal("0"), alias='Comissions', ge=0, le=99999999999999)
+    Dividends: Decimal = Field(default=Decimal("0"), alias='Dividends', ge=0, le=99999999999999)
+    InterestInc: Decimal = Field(default=Decimal("0"), alias='InterestInc', ge=0, le=99999999999999)
+    # No official minimum on the profit/gain leaves below: a genuine loss on
+    # sale, on foreign-exchange fluctuation, or on inventory conversion is
+    # disclosed here as a negative figure.
+    ProfitOnSaleFixedAsset: Decimal = Field(default=Decimal("0"), alias='ProfitOnSaleFixedAsset', le=99999999999999)
+    ProfitOnInvChrSTT: Decimal = Field(default=Decimal("0"), alias='ProfitOnInvChrSTT', le=99999999999999)
+    ProfitOnOthInv: Decimal = Field(default=Decimal("0"), alias='ProfitOnOthInv', le=99999999999999)
+    ProfitOnCurrFluct: Decimal = Field(default=Decimal("0"), alias='ProfitOnCurrFluct', le=99999999999999)
+    ProfitOnCnvInvntryToCapAsst: Decimal = Field(default=Decimal("0"), alias='ProfitOnCnvInvntryToCapAsst', le=99999999999999)
+    ProfitOnAgriIncome: Decimal = Field(default=Decimal("0"), alias='ProfitOnAgriIncome', le=99999999999999)
+    OtherIncDtls: Optional[list[PLPLPLPLPartACreditsToPLOthIncomeOtherIncDtlsRow]] = Field(default=None, alias='OtherIncDtls')
+    LiabilityWrittenBack: Optional[Decimal] = Field(default=None, alias='LiabilityWrittenBack', le=99999999999999)
+    AmtofInterest: Optional[Decimal] = Field(default=None, alias='AmtofInterest', ge=0, le=99999999999999)
+    AmtofRem: Optional[Decimal] = Field(default=None, alias='AmtofRem', ge=0, le=99999999999999)
+    MiscOthIncome: Decimal = Field(default=Decimal("0"), alias='MiscOthIncome', le=99999999999999)
+    TotOthIncome: Decimal = Field(default=Decimal("0"), alias='TotOthIncome', le=99999999999999)
     model_config = ConfigDict(populate_by_name=True)
 
+    @property
+    def rent_income(self) -> Decimal:
+        """Return rent income using the legacy canonical attribute name."""
+        return self.RentInc
 
-class PLInterestExpense(BaseModel):
-    """Typed PARTA_PL interest-expense credit-party breakdown."""
+    @property
+    def dividends(self) -> Decimal:
+        """Return dividends using the legacy canonical attribute name."""
+        return self.Dividends
 
-    non_resident_or_other_company: Decimal = Field(default=Decimal("0"), alias="NonResOtherCompany", ge=0)
-    others: Decimal = Field(default=Decimal("0"), alias="Others", ge=0)
-    total: Decimal = Field(default=Decimal("0"), alias="InterestExpdr", ge=0)
-    model_config = ConfigDict(populate_by_name=True)
+    @property
+    def commissions(self) -> Decimal:
+        """Return commissions using the legacy canonical attribute name."""
+        return self.Comissions
+
+    @property
+    def interest_income(self) -> Decimal:
+        """Return interest income using the legacy canonical attribute name."""
+        return self.InterestInc
+
+    @property
+    def profit_on_sale_fixed_asset(self) -> Decimal:
+        """Return fixed-asset profit using the legacy canonical attribute name."""
+        return self.ProfitOnSaleFixedAsset
+
+    @property
+    def profit_on_investment_stt(self) -> Decimal:
+        """Return STT investment profit using the legacy canonical attribute name."""
+        return self.ProfitOnInvChrSTT
+
+    @property
+    def profit_on_other_investment(self) -> Decimal:
+        """Return other investment profit using the legacy canonical attribute name."""
+        return self.ProfitOnOthInv
+
+    @property
+    def profit_on_currency_fluctuation(self) -> Decimal:
+        """Return currency fluctuation profit using the legacy canonical attribute name."""
+        return self.ProfitOnCurrFluct
+
+    @property
+    def profit_on_inventory_conversion(self) -> Decimal:
+        """Return inventory conversion profit using the legacy canonical attribute name."""
+        return self.ProfitOnCnvInvntryToCapAsst
+
+    @property
+    def profit_on_agricultural_income(self) -> Decimal:
+        """Return agricultural profit using the legacy canonical attribute name."""
+        return self.ProfitOnAgriIncome
+
+class PLPLPartACreditsToPL(BaseModel):
+    GrossProfitTrnsfFrmTrdAcc: Optional[Decimal] = Field(default=None, alias='GrossProfitTrnsfFrmTrdAcc', le=99999999999999)
+    OthIncome: PLPLPLPartACreditsToPLOthIncome = Field(default_factory=PLPLPLPartACreditsToPLOthIncome, alias='OthIncome')
+    TotCreditsToPL: Decimal = Field(default=Decimal("0"), alias='TotCreditsToPL', le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPartADebitsToPLEmployeeComp(BaseModel):
+    """Typed official PARTA_PL PLPLPLPartADebitsToPLEmployeeComp disclosure block."""
+    SalsWages: Decimal = Field(default=Decimal("0"), alias='SalsWages', ge=0, le=99999999999999)
+    Bonus: Decimal = Field(default=Decimal("0"), alias='Bonus', ge=0, le=99999999999999)
+    MedExpReimb: Decimal = Field(default=Decimal("0"), alias='MedExpReimb', ge=0, le=99999999999999)
+    LeaveEncash: Decimal = Field(default=Decimal("0"), alias='LeaveEncash', ge=0, le=99999999999999)
+    LeaveTravelBenft: Decimal = Field(default=Decimal("0"), alias='LeaveTravelBenft', ge=0, le=99999999999999)
+    ContToSuperAnnFund: Decimal = Field(default=Decimal("0"), alias='ContToSuperAnnFund', ge=0, le=99999999999999)
+    ContToPF: Decimal = Field(default=Decimal("0"), alias='ContToPF', ge=0, le=99999999999999)
+    ContToGratFund: Decimal = Field(default=Decimal("0"), alias='ContToGratFund', ge=0, le=99999999999999)
+    ContToOthFund: Decimal = Field(default=Decimal("0"), alias='ContToOthFund', ge=0, le=99999999999999)
+    OthEmpBenftExpdr: Decimal = Field(default=Decimal("0"), alias='OthEmpBenftExpdr', ge=0, le=99999999999999)
+    TotEmployeeComp: Decimal = Field(default=Decimal("0"), alias='TotEmployeeComp', ge=0, le=99999999999999)
+    AnyCompPaidToNonRes: Optional[str] = Field(default=None, alias='AnyCompPaidToNonRes', pattern=r'Y|N')
+    AmtPaidToNonRes: Optional[Decimal] = Field(default=None, alias='AmtPaidToNonRes', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPartADebitsToPLInsurances(BaseModel):
+    """Typed official PARTA_PL PLPLPLPartADebitsToPLInsurances disclosure block."""
+    MedInsur: Decimal = Field(default=Decimal("0"), alias='MedInsur', ge=0, le=99999999999999)
+    LifeInsur: Decimal = Field(default=Decimal("0"), alias='LifeInsur', ge=0, le=99999999999999)
+    KeyManInsur: Decimal = Field(default=Decimal("0"), alias='KeyManInsur', ge=0, le=99999999999999)
+    OthInsur: Decimal = Field(default=Decimal("0"), alias='OthInsur', ge=0, le=99999999999999)
+    TotInsurances: Decimal = Field(default=Decimal("0"), alias='TotInsurances', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPartADebitsToPLCommissionExpdrDtls(BaseModel):
+    """Typed official PARTA_PL PLPLPLPartADebitsToPLCommissionExpdrDtls disclosure block."""
+    NonResOtherCompany: Decimal = Field(default=Decimal("0"), alias='NonResOtherCompany', ge=0, le=99999999999999)
+    Others: Decimal = Field(default=Decimal("0"), alias='Others', ge=0, le=99999999999999)
+    Total: Decimal = Field(default=Decimal("0"), alias='Total', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPartADebitsToPLRoyalityDtls(BaseModel):
+    """Typed official PARTA_PL PLPLPLPartADebitsToPLRoyalityDtls disclosure block."""
+    NonResOtherCompany: Decimal = Field(default=Decimal("0"), alias='NonResOtherCompany', ge=0, le=99999999999999)
+    Others: Decimal = Field(default=Decimal("0"), alias='Others', ge=0, le=99999999999999)
+    Total: Decimal = Field(default=Decimal("0"), alias='Total', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPartADebitsToPLProfessionalConstDtls(BaseModel):
+    """Typed official PARTA_PL PLPLPLPartADebitsToPLProfessionalConstDtls disclosure block."""
+    NonResOtherCompany: Decimal = Field(default=Decimal("0"), alias='NonResOtherCompany', ge=0, le=99999999999999)
+    Others: Decimal = Field(default=Decimal("0"), alias='Others', ge=0, le=99999999999999)
+    Total: Decimal = Field(default=Decimal("0"), alias='Total', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPLPartADebitsToPLRatesTaxesPaysExciseCustomsVAT(BaseModel):
+    """Typed official rates-and-taxes breakdown (form item 44).
+
+    ``Cess`` appears in the shared ``ExciseCustomsVAT`` definition used by the
+    trading account, but is not part of PARTA_PL's own rates-and-taxes block --
+    it is accepted optionally here for callers that reuse the trading-account
+    shape, and is only emitted when it carries a real value.
+    """
+    UnionExciseDuty: Decimal = Field(default=Decimal("0"), alias='UnionExciseDuty', ge=0, le=99999999999999)
+    ServiceTax: Decimal = Field(default=Decimal("0"), alias='ServiceTax', ge=0, le=99999999999999)
+    VATorSaleTax: Decimal = Field(default=Decimal("0"), alias='VATorSaleTax', ge=0, le=99999999999999)
+    Cess: Optional[Decimal] = Field(default=None, alias='Cess', ge=0, le=99999999999999)
+    CentralGoodServiceTax: Decimal = Field(default=Decimal("0"), alias='CentralGoodServiceTax', ge=0, le=99999999999999)
+    StateGoodServiceTax: Decimal = Field(default=Decimal("0"), alias='StateGoodServiceTax', ge=0, le=99999999999999)
+    IntegratedGoodServiceTax: Decimal = Field(default=Decimal("0"), alias='IntegratedGoodServiceTax', ge=0, le=99999999999999)
+    UnionTerrGoodServiceTax: Decimal = Field(default=Decimal("0"), alias='UnionTerrGoodServiceTax', ge=0, le=99999999999999)
+    OthDutyTaxCess: Decimal = Field(default=Decimal("0"), alias='OthDutyTaxCess', ge=0, le=99999999999999)
+    TotExciseCustomsVAT: Decimal = Field(default=Decimal("0"), alias='TotExciseCustomsVAT', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPartADebitsToPLRatesTaxesPays(BaseModel):
+    """Typed official PARTA_PL PLPLPLPartADebitsToPLRatesTaxesPays disclosure block."""
+    ExciseCustomsVAT: PLPLPLPLPartADebitsToPLRatesTaxesPaysExciseCustomsVAT = Field(default_factory=PLPLPLPLPartADebitsToPLRatesTaxesPaysExciseCustomsVAT, alias='ExciseCustomsVAT')
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPartADebitsToPLOtherExpensesDtlsRow(BaseModel):
+    """Typed official PARTA_PL PLPLPLPartADebitsToPLOtherExpensesDtlsRow disclosure block."""
+    ExpenseNature: str = Field(default_factory=str, alias='ExpenseNature')
+    Amount: Decimal = Field(default=Decimal("0"), alias='Amount', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPLPartADebitsToPLBadDebtDtlsBadDebtAmtDtlsRow(BaseModel):
+    """Typed official PARTA_PL PLPLPLPLPartADebitsToPLBadDebtDtlsBadDebtAmtDtlsRow disclosure block."""
+    PAN: str = Field(default_factory=str, alias='PAN')
+    Aadhaar: Optional[str] = Field(default=None, alias='Aadhaar')
+    Amount: Decimal = Field(default=Decimal("0"), alias='Amount', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPLPartADebitsToPLBadDebtDtlsOthersPANNotAvlblDtlRow(BaseModel):
+    """Typed official PARTA_PL PLPLPLPLPartADebitsToPLBadDebtDtlsOthersPANNotAvlblDtlRow disclosure block."""
+    Name: str = Field(default_factory=str, alias='Name')
+    FlatDoorBlockNumber: str = Field(default_factory=str, alias='FlatDoorBlockNumber')
+    PremisesBuildingName: Optional[str] = Field(default=None, alias='PremisesBuildingName')
+    RoadStreetPostOffice: Optional[str] = Field(default=None, alias='RoadStreetPostOffice')
+    AreaLocality: str = Field(default_factory=str, alias='AreaLocality')
+    TownCityDistrict: str = Field(default_factory=str, alias='TownCityDistrict')
+    StateCode: str = Field(default_factory=str, alias='StateCode')
+    CountryCode: str = Field(default_factory=str, alias='CountryCode')
+    PinCode: Optional[Decimal] = Field(default=None, alias='PinCode', ge=100000, le=999999)
+    ZipCode: Optional[str] = Field(default=None, alias='ZipCode')
+    Amount: Decimal = Field(default=Decimal("0"), alias='Amount', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPartADebitsToPLBadDebtDtls(BaseModel):
+    """Typed official PARTA_PL PLPLPLPartADebitsToPLBadDebtDtls disclosure block."""
+    BadDebtAmtDtls: Optional[list[PLPLPLPLPartADebitsToPLBadDebtDtlsBadDebtAmtDtlsRow]] = Field(default=None, alias='BadDebtAmtDtls')
+    BadDebtAmtDtlsTotal: Decimal = Field(default=Decimal("0"), alias='BadDebtAmtDtlsTotal', ge=0, le=99999999999999)
+    OthersPANNotAvlblDtl: Optional[list[PLPLPLPLPartADebitsToPLBadDebtDtlsOthersPANNotAvlblDtlRow]] = Field(default=None, alias='OthersPANNotAvlblDtl')
+    OthersPANNotAvlblDtlTotal: Decimal = Field(default=Decimal("0"), alias='OthersPANNotAvlblDtlTotal', ge=0, le=99999999999999)
+    OthersAmtLt1Lakh: Decimal = Field(default=Decimal("0"), alias='OthersAmtLt1Lakh', ge=0, le=99999999999999)
+    BadDebt: Decimal = Field(default=Decimal("0"), alias='BadDebt', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPLPartADebitsToPLInterestExpdrtDtls(BaseModel):
+    """Typed official PARTA_PL interest-expense disclosure block."""
+    NonResOtherCompany: Decimal = Field(default=Decimal("0"), alias='NonResOtherCompany', ge=0, le=99999999999999)
+    Others: Decimal = Field(default=Decimal("0"), alias='Others', ge=0, le=99999999999999)
+    InterestExpdr: Decimal = Field(default=Decimal("0"), alias='InterestExpdr', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    @property
+    def total(self) -> Decimal:
+        """Return total interest expense using the legacy canonical name."""
+        return self.InterestExpdr
+
+    @property
+    def non_resident_or_other_company(self) -> Decimal:
+        """Return non-resident/company interest using the canonical name."""
+        return self.NonResOtherCompany
+
+    @property
+    def others(self) -> Decimal:
+        """Return other interest using the canonical name."""
+        return self.Others
+
+class PLPLPartADebitsToPL(BaseModel):
+    """Typed official PARTA_PL PLPLPartADebitsToPL disclosure block."""
+    Freight: Decimal = Field(default=Decimal("0"), alias='Freight', ge=0, le=99999999999999)
+    ConsumptionOfStores: Decimal = Field(default=Decimal("0"), alias='ConsumptionOfStores', ge=0, le=99999999999999)
+    PowerFuel: Decimal = Field(default=Decimal("0"), alias='PowerFuel', ge=0, le=99999999999999)
+    RentExpdr: Decimal = Field(default=Decimal("0"), alias='RentExpdr', ge=0, le=99999999999999)
+    RepairsBldg: Decimal = Field(default=Decimal("0"), alias='RepairsBldg', ge=0, le=99999999999999)
+    RepairMach: Decimal = Field(default=Decimal("0"), alias='RepairMach', ge=0, le=99999999999999)
+    EmployeeComp: PLPLPLPartADebitsToPLEmployeeComp = Field(default_factory=PLPLPLPartADebitsToPLEmployeeComp, alias='EmployeeComp')
+    Insurances: PLPLPLPartADebitsToPLInsurances = Field(default_factory=PLPLPLPartADebitsToPLInsurances, alias='Insurances')
+    StaffWelfareExp: Decimal = Field(default=Decimal("0"), alias='StaffWelfareExp', ge=0, le=99999999999999)
+    Entertainment: Decimal = Field(default=Decimal("0"), alias='Entertainment', ge=0, le=99999999999999)
+    Hospitality: Decimal = Field(default=Decimal("0"), alias='Hospitality', ge=0, le=99999999999999)
+    Conference: Decimal = Field(default=Decimal("0"), alias='Conference', ge=0, le=99999999999999)
+    SalePromoExp: Decimal = Field(default=Decimal("0"), alias='SalePromoExp', ge=0, le=99999999999999)
+    Advertisement: Decimal = Field(default=Decimal("0"), alias='Advertisement', ge=0, le=99999999999999)
+    CommissionExpdrDtls: PLPLPLPartADebitsToPLCommissionExpdrDtls = Field(default_factory=PLPLPLPartADebitsToPLCommissionExpdrDtls, alias='CommissionExpdrDtls')
+    RoyalityDtls: PLPLPLPartADebitsToPLRoyalityDtls = Field(default_factory=PLPLPLPartADebitsToPLRoyalityDtls, alias='RoyalityDtls')
+    ProfessionalConstDtls: PLPLPLPartADebitsToPLProfessionalConstDtls = Field(default_factory=PLPLPLPartADebitsToPLProfessionalConstDtls, alias='ProfessionalConstDtls')
+    HotelBoardLodge: Decimal = Field(default=Decimal("0"), alias='HotelBoardLodge', ge=0, le=99999999999999)
+    TravelExp: Decimal = Field(default=Decimal("0"), alias='TravelExp', ge=0, le=99999999999999)
+    ForeignTravelExp: Decimal = Field(default=Decimal("0"), alias='ForeignTravelExp', ge=0, le=99999999999999)
+    ConveyanceExp: Decimal = Field(default=Decimal("0"), alias='ConveyanceExp', ge=0, le=99999999999999)
+    TelephoneExp: Decimal = Field(default=Decimal("0"), alias='TelephoneExp', ge=0, le=99999999999999)
+    GuestHouseExp: Decimal = Field(default=Decimal("0"), alias='GuestHouseExp', ge=0, le=99999999999999)
+    ClubExp: Decimal = Field(default=Decimal("0"), alias='ClubExp', ge=0, le=99999999999999)
+    FestivalCelebExp: Decimal = Field(default=Decimal("0"), alias='FestivalCelebExp', ge=0, le=99999999999999)
+    Scholarship: Decimal = Field(default=Decimal("0"), alias='Scholarship', ge=0, le=99999999999999)
+    Gift: Decimal = Field(default=Decimal("0"), alias='Gift', ge=0, le=99999999999999)
+    Donation: Decimal = Field(default=Decimal("0"), alias='Donation', ge=0, le=99999999999999)
+    RatesTaxesPays: PLPLPLPartADebitsToPLRatesTaxesPays = Field(default_factory=PLPLPLPartADebitsToPLRatesTaxesPays, alias='RatesTaxesPays')
+    AuditFee: Decimal = Field(default=Decimal("0"), alias='AuditFee', ge=0, le=99999999999999)
+    OtherExpensesDtls: Optional[list[PLPLPLPartADebitsToPLOtherExpensesDtlsRow]] = Field(default=None, alias='OtherExpensesDtls')
+    OtherExpenses: Decimal = Field(default=Decimal("0"), alias='OtherExpenses', ge=0, le=99999999999999)
+    BadDebtDtls: PLPLPLPartADebitsToPLBadDebtDtls = Field(default_factory=PLPLPLPartADebitsToPLBadDebtDtls, alias='BadDebtDtls')
+    # No official minimum on these three: a provision or a P&L result can be
+    # a genuine negative/credit figure.
+    ProvForBadDoubtDebt: Decimal = Field(default=Decimal("0"), alias='ProvForBadDoubtDebt', le=99999999999999)
+    OthProvisionsExpdr: Decimal = Field(default=Decimal("0"), alias='OthProvisionsExpdr', le=99999999999999)
+    PBIDTA: Decimal = Field(default=Decimal("0"), alias='PBIDTA', le=99999999999999)
+    InterestExpdrtDtls: PLPLPLPartADebitsToPLInterestExpdrtDtls = Field(default_factory=PLPLPLPartADebitsToPLInterestExpdrtDtls, alias='InterestExpdrtDtls')
+    DepreciationAmort: Decimal = Field(default=Decimal("0"), alias='DepreciationAmort', ge=0, le=99999999999999)
+    PBT: Decimal = Field(default=Decimal("0"), alias='PBT', le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPartATaxProvAppr(BaseModel):
+    """Typed official PARTA_PL tax-provision and appropriation block (form
+    items 54-60). None of these seven fields carries an official minimum: a
+    brought-forward balance or an appropriation can be negative."""
+    ProvForCurrTax: Decimal = Field(default=Decimal("0"), alias='ProvForCurrTax', le=99999999999999)
+    ProvDefTax: Decimal = Field(default=Decimal("0"), alias='ProvDefTax', le=99999999999999)
+    ProfitAfterTax: Decimal = Field(default=Decimal("0"), alias='ProfitAfterTax', le=99999999999999)
+    BalBFPrevYr: Decimal = Field(default=Decimal("0"), alias='BalBFPrevYr', le=99999999999999)
+    AmtAvlAppr: Decimal = Field(default=Decimal("0"), alias='AmtAvlAppr', le=99999999999999)
+    TrfToReserves: Decimal = Field(default=Decimal("0"), alias='TrfToReserves', le=99999999999999)
+    ProprietorAccBalTrf: Decimal = Field(default=Decimal("0"), alias='ProprietorAccBalTrf', le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPartANatOfBus44ADRow(BaseModel):
+    """Typed official PARTA_PL PLPLPartANatOfBus44ADRow disclosure block."""
+    NameOfBusiness: str = Field(default_factory=str, alias='NameOfBusiness')
+    CodeAD: str = Field(default_factory=str, alias='CodeAD')
+    Description: Optional[str] = Field(default=None, alias='Description')
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPartAPersumptiveInc44AD(BaseModel):
+    """Typed official 44AD presumptive computation (form item 61).
+
+    The official turnover ceiling is Rs.3 crore (the extended limit when cash
+    receipts stay within 5%); ``TotPersumptiveInc44AD`` is the computed 44AD
+    income and carries no official minimum.
+    """
+    GrsTrnOverOrReceipt: Decimal = Field(default=Decimal("0"), alias='GrsTrnOverOrReceipt', ge=0, le=30000000)
+    GrsTrnOverBank: Optional[Decimal] = Field(default=None, alias='GrsTrnOverBank', ge=0, le=30000000)
+    GrsTotalTrnOverInCash: Optional[Decimal] = Field(default=None, alias='GrsTotalTrnOverInCash', ge=0, le=30000000)
+    GrsTrnOverstrOthMode: Optional[Decimal] = Field(default=None, alias='GrsTrnOverAnyOthMode', ge=0, le=30000000)
+    TotPersumptiveInc44AD: Decimal = Field(default=Decimal("0"), alias='TotPersumptiveInc44AD', le=99999999999999)
+    PersumptiveInc44AD6Per: Optional[Decimal] = Field(default=None, alias='PersumptiveInc44AD6Per', ge=0, le=99999999999999)
+    PersumptiveInc44AD8Per: Optional[Decimal] = Field(default=None, alias='PersumptiveInc44AD8Per', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPartANatOfBus44ADARow(BaseModel):
+    """Typed official PARTA_PL PLPLPartANatOfBus44ADARow disclosure block."""
+    NameOfBusiness: str = Field(default_factory=str, alias='NameOfBusiness')
+    CodeADA: str = Field(default_factory=str, alias='CodeADA')
+    Description: Optional[str] = Field(default=None, alias='Description')
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPartAPersumptiveInc44ADA(BaseModel):
+    """Typed official 44ADA presumptive computation (form item 62).
+
+    Official gross-receipt ceiling is Rs.75 lakh (the extended limit when cash
+    receipts stay within 5%); ``TotPersumptiveInc44ADA`` is the computed 44ADA
+    income and carries no official minimum.
+    """
+    GrsReceipt: Decimal = Field(default=Decimal("0"), alias='GrsReceipt', ge=0, le=7500000)
+    GrsTrnOverBank44ADA: Optional[Decimal] = Field(default=None, alias='GrsTrnOverBank44ADA', ge=0, le=7500000)
+    GrsTotalTrnOverInCash44ADA: Optional[Decimal] = Field(default=None, alias='GrsTotalTrnOverInCash44ADA', ge=0, le=7500000)
+    GrsTrnOverstrOthMode44ADA: Optional[Decimal] = Field(default=None, alias='GrsTrnOverAnyOthMode44ADA', ge=0, le=7500000)
+    TotPersumptiveInc44ADA: Optional[Decimal] = Field(default=None, alias='TotPersumptiveInc44ADA', le=9999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPartANatOfBus44AERow(BaseModel):
+    """Typed official PARTA_PL PLPLPartANatOfBus44AERow disclosure block."""
+    NameOfBusiness: str = Field(default_factory=str, alias='NameOfBusiness')
+    CodeAE: str = Field(default_factory=str, alias='CodeAE')
+    Description: Optional[str] = Field(default=None, alias='Description')
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPartAGoodsDtlsUs44AERow(BaseModel):
+    """Typed official PARTA_PL PLPLPartAGoodsDtlsUs44AERow disclosure block.
+
+    Official bounds: tonnage 0-100 MT, holding period 1-12 months (form item
+    63(i) columns 3 and 4), and presumptive income at least the statutory
+    Rs.7,500 floor (the smaller of the two 44AE per-vehicle rates, so it is
+    the correct schema-level minimum regardless of tonnage).
+    """
+    RegNumberGoodsCarriage: str = Field(default_factory=str, alias='RegNumberGoodsCarriage')
+    OwnedLeasedHiredFlag: str = Field(default="", alias='OwnedLeasedHiredFlag')
+    TonnageCapacity: Decimal = Field(default=Decimal("0"), alias='TonnageCapacity', ge=0, le=100)
+    HoldingPeriod: Decimal = Field(default=Decimal("0"), alias='HoldingPeriod', ge=1, le=12)
+    PresumptiveIncome: Decimal = Field(default=Decimal("0"), alias='PresumptiveIncome', ge=7500, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPartANoBooksOfAccPL(BaseModel):
+    """Typed official PARTA_PL PLPLPartANoBooksOfAccPL disclosure block.
+
+    Business and profession disclosures (form items 64(i)/(ii)). ``GrossProfit``
+    and ``GrossProfitPrf`` carry no official minimum (a gross result can be
+    negative); every other field is non-negative.
+    """
+    GrossReceipt: Decimal = Field(default=Decimal("0"), alias='GrossReceipt', ge=0, le=99999999999999)
+    GrsRcptAccPayeeOrBankMode: Decimal = Field(default=Decimal("0"), alias='GrsRcptAccPayeeOrBankMode', ge=0, le=99999999999999)
+    GrsRcptOtherMode: Decimal = Field(default=Decimal("0"), alias='GrsRcptOtherMode', ge=0, le=99999999999999)
+    GrossProfit: Decimal = Field(default=Decimal("0"), alias='GrossProfit', le=99999999999999)
+    Expenses: Decimal = Field(default=Decimal("0"), alias='Expenses', ge=0, le=99999999999999)
+    NetProfit: Decimal = Field(default=Decimal("0"), alias='NetProfit', ge=0, le=99999999999999)
+    GrossReceiptPrf: Decimal = Field(default=Decimal("0"), alias='GrossReceiptPrf', ge=0, le=99999999999999)
+    GrsRcptAccPayeeOrBankModePrf: Decimal = Field(default=Decimal("0"), alias='GrsRcptAccPayeeOrBankModePrf', ge=0, le=99999999999999)
+    GrsRcptOtherModePrf: Decimal = Field(default=Decimal("0"), alias='GrsRcptOtherModePrf', ge=0, le=99999999999999)
+    GrossProfitPrf: Decimal = Field(default=Decimal("0"), alias='GrossProfitPrf', le=99999999999999)
+    ExpensesPrf: Decimal = Field(default=Decimal("0"), alias='ExpensesPrf', ge=0, le=99999999999999)
+    NetProfitPrf: Decimal = Field(default=Decimal("0"), alias='NetProfitPrf', ge=0, le=99999999999999)
+    TotBusinessProfession: Decimal = Field(default=Decimal("0"), alias='TotBusinessProfession', le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPartANonResidentPLDetailsRow(BaseModel):
+    """Typed official PARTA_PL PLPLPartANonResidentPLDetailsRow (form item 66).
+
+    ``Section`` is the CBDT dropdown enum rather than a free string; the
+    official list is exactly 44B/44BB/44BBA/44BBC/44BBD.
+    """
+    Section: Optional[str] = Field(default=None, alias='Section', pattern=r'^(44B|44BB|44BBA|44BBC|44BBD)$')
+    GrossReceipt: Optional[Decimal] = Field(default=None, alias='GrossReceipt', ge=0, le=99999999999999)
+    NetProfit: Optional[Decimal] = Field(default=None, alias='NetProfit', ge=0, le=99999999999999)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPLPartANonResidentPL(BaseModel):
+    """Typed official PARTA_PL PLPLPartANonResidentPL disclosure block."""
+    GrossReceipt: Optional[Decimal] = Field(default=None, alias='GrossReceipt', ge=0, le=99999999999999)
+    NetProfit: Optional[Decimal] = Field(default=None, alias='NetProfit')
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+class PLPartA(BaseModel):
+    """Typed official PARTA_PL PLPartA disclosure block."""
+    CreditsToPL: PLPLPartACreditsToPL = Field(default_factory=PLPLPartACreditsToPL, alias='CreditsToPL')
+    DebitsToPL: PLPLPartADebitsToPL = Field(default_factory=PLPLPartADebitsToPL, alias='DebitsToPL')
+    TaxProvAppr: PLPLPartATaxProvAppr = Field(default_factory=PLPLPartATaxProvAppr, alias='TaxProvAppr')
+    NatOfBus44AD: Optional[list[PLPLPartANatOfBus44ADRow]] = Field(default=None, alias='NatOfBus44AD')
+    PersumptiveInc44AD: Optional[PLPLPartAPersumptiveInc44AD] = Field(default=None, alias='PersumptiveInc44AD')
+    NatOfBus44ADA: Optional[list[PLPLPartANatOfBus44ADARow]] = Field(default=None, alias='NatOfBus44ADA')
+    PersumptiveInc44ADA: Optional[PLPLPartAPersumptiveInc44ADA] = Field(default=None, alias='PersumptiveInc44ADA')
+    NatOfBus44AE: Optional[list[PLPLPartANatOfBus44AERow]] = Field(default=None, alias='NatOfBus44AE')
+    GoodsDtlsUs44AE: Optional[list[PLPLPartAGoodsDtlsUs44AERow]] = Field(default=None, alias='GoodsDtlsUs44AE')
+    TotalNumOfMonths: Optional[Decimal] = Field(default=None, alias='TotalNumOfMonths')
+    TotalPrsumptvIncUs44EGoods: Optional[Decimal] = Field(default=None, alias='TotalPrsumptvIncUs44EGoods')
+    TotalPrsumptvIncUs44E: Optional[Decimal] = Field(default=None, alias='TotalPrsumptvIncUs44E')
+    NoBooksOfAccPL: PLPLPartANoBooksOfAccPL = Field(default_factory=PLPLPartANoBooksOfAccPL, alias='NoBooksOfAccPL')
+    TurnverFrmSpecActivity: Decimal = Field(default=Decimal("0"), alias='TurnverFrmSpecActivity', ge=0, le=99999999999999)
+    GrossProfit: Optional[Decimal] = Field(default=None, alias='GrossProfit')
+    Expenditure: Optional[Decimal] = Field(default=None, alias='Expenditure', ge=0, le=99999999999999)
+    NetIncomeFrmSpecActivity: Decimal = Field(default=Decimal("0"), alias='NetIncomeFrmSpecActivity')
+    NonResidentPLDetails: Optional[list[PLPLPartANonResidentPLDetailsRow]] = Field(default=None, alias='NonResidentPLDetails')
+    NonResidentPL: Optional[PLPLPartANonResidentPL] = Field(default=None, alias='NonResidentPL')
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
 class ProfitAndLoss(BaseModel):
-    """Typed required PARTA_PL totals and bounded credit/debit disclosures."""
+    """Typed PARTA_PL source model with every official nested disclosure."""
+    gross_profit: Decimal = Field(default=Decimal("0"), ge=0, alias="GrossProfit")
+    expenditure: Decimal = Field(default=Decimal("0"), ge=0, alias="Expenditure")
+    net_income_from_special_activity: Decimal = Field(default=Decimal("0"), ge=0, alias="NetIncomeFrmSpecActivity")
+    turnover_from_special_activity: Decimal = Field(default=Decimal("0"), ge=0, alias="TurnverFrmSpecActivity")
+    part_a: PLPartA = Field(default_factory=PLPartA, exclude=True)
+    no_books_gross_receipt: Decimal = Decimal("0")
+    no_books_gross_profit: Decimal = Decimal("0")
+    no_books_expenses: Decimal = Decimal("0")
+    no_books_net_profit: Decimal = Decimal("0")
+    provision_current_tax: Decimal = Decimal("0")
+    provision_deferred_tax: Decimal = Decimal("0")
+    profit_after_tax: Decimal = Decimal("0")
+    gross_profit_from_trading: Decimal = Decimal("0")
+    other_income_breakdown: PLPLPLPartACreditsToPLOthIncome = Field(default_factory=PLPLPLPartACreditsToPLOthIncome)
+    other_income: Decimal = Decimal("0")
+    total_credits: Decimal = Decimal("0")
 
-    gross_profit: Decimal = Field(default=Decimal("0"), ge=0)
-    expenditure: Decimal = Field(default=Decimal("0"), ge=0)
-    net_income_from_special_activity: Decimal = Field(default=Decimal("0"), ge=0)
-    turnover_from_special_activity: Decimal = Field(default=Decimal("0"), ge=0)
-    no_books_gross_receipt: Decimal = Field(default=Decimal("0"), ge=0)
-    no_books_gross_profit: Decimal = Field(default=Decimal("0"), ge=0)
-    no_books_expenses: Decimal = Field(default=Decimal("0"), ge=0)
-    no_books_net_profit: Decimal = Field(default=Decimal("0"), ge=0)
-    provision_current_tax: Decimal = Field(default=Decimal("0"), ge=0)
-    provision_deferred_tax: Decimal = Field(default=Decimal("0"), ge=0)
-    profit_after_tax: Decimal = Field(default=Decimal("0"), ge=0)
-    gross_profit_from_trading: Decimal = Field(default=Decimal("0"), ge=0)
-    other_income: Decimal = Field(default=Decimal("0"), ge=0)
-    other_income_breakdown: PLOtherIncome = Field(default_factory=PLOtherIncome)
-    total_credits: Decimal = Field(default=Decimal("0"), ge=0)
-    total_expenses: Decimal = Field(default=Decimal("0"), ge=0)
-    pbidta: Decimal = Field(default=Decimal("0"), ge=0)
-    interest_expense: PLInterestExpense = Field(default_factory=PLInterestExpense)
-    depreciation_amortization: Decimal = Field(default=Decimal("0"), ge=0)
-    profit_before_tax: Decimal = Field(default=Decimal("0"))
+    total_expenses: Decimal = Decimal("0")
+    pbidta: Decimal = Decimal("0")
+    interest_expense: PLPLPLPartADebitsToPLInterestExpdrtDtls = Field(default_factory=PLPLPLPartADebitsToPLInterestExpdrtDtls)
+    depreciation_amortization: Decimal = Decimal("0")
+    profit_before_tax: Decimal = Decimal("0")
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class BSReserves(BaseModel):

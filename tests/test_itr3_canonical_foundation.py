@@ -781,20 +781,223 @@ def test_itr3_builder_preserves_parta_pl_pbidta_and_depreciation() -> None:
     assert payload["DebitsToPL"]["PBT"] == 152000
 
 
-def test_itr3_builder_uses_part_a_pl_workspace_data() -> None:
-    """PARTA_PL JSON carries typed workspace totals instead of hardcoded zeros."""
+def test_itr3_typed_parta_pl_nested_rows_preserve_arrays() -> None:
+    """PARTA_PL nested rows are real typed models, and every row of a
+    repeatable official array survives -- not a first-row-only flatten."""
+    from app.schemas.itr3 import PLPartA
+
+    source = {
+        "CreditsToPL": {
+            "OthIncome": {
+                "OtherIncDtls": [
+                    {"NatureOfIncome": "Consulting", "Amount": 1234},
+                    {"NatureOfIncome": "Royalty", "Amount": 4321},
+                ]
+            }
+        },
+        "DebitsToPL": {"OtherExpensesDtls": [{"ExpenseNature": "Cloud hosting", "Amount": 5678}]},
+        "NatOfBus44AD": [{"NameOfBusiness": "Retail", "CodeAD": "01001"}],
+        "NonResidentPLDetails": [{"Section": "44BB", "GrossReceipt": 9000, "NetProfit": 1500}],
+    }
+    model = PLPartA.model_validate(source)
+    assert len(model.CreditsToPL.OthIncome.OtherIncDtls) == 2
+    assert model.CreditsToPL.OthIncome.OtherIncDtls[0].Amount == Decimal("1234")
+    assert model.CreditsToPL.OthIncome.OtherIncDtls[1].Amount == Decimal("4321")
+    assert model.DebitsToPL.OtherExpensesDtls[0].ExpenseNature == "Cloud hosting"
+    assert model.NatOfBus44AD[0].CodeAD == "01001"
+    assert model.NonResidentPLDetails[0].NetProfit == Decimal("1500")
+    dumped = model.model_dump(by_alias=True, exclude_none=True)
+    assert dumped["DebitsToPL"]["OtherExpensesDtls"][0]["Amount"] == Decimal("5678")
+    assert len(dumped["CreditsToPL"]["OthIncome"]["OtherIncDtls"]) == 2
+
+
+def test_itr3_builder_emits_fully_populated_parta_pl_schema_valid_payload() -> None:
+    """Schedule 8 (Part A-P&L): a fully populated typed PARTA_PL reaches the
+    ITD builder and validates against the official PARTA_PL definition --
+    totals, nested debit groups, bad-debt rows, and every optional
+    presumptive/non-resident block included."""
     from app.engine.calculators.itr3 import compute as compute_itr3
     from app.engine.itd.itr3 import build_itr3_json
 
     draft = _draft_with_business()
-    draft.itr3BusinessWorkspace.core = {"PARTA_PL": {"GrossProfit": 240000, "Expenditure": 90000, "NetIncomeFrmSpecActivity": 12000, "TurnverFrmSpecActivity": 300000}}
+    draft.itr3BusinessWorkspace.core = {"PARTA_PL": {
+        "GrossProfit": 240000,
+        "Expenditure": 108000,
+        "NetIncomeFrmSpecActivity": 12000,
+        "TurnverFrmSpecActivity": 300000,
+        "CreditsToPL": {
+            "GrossProfitTrnsfFrmTrdAcc": 240000,
+            "TotCreditsToPL": 360000,
+            "OthIncome": {
+                "RentInc": 1000, "Comissions": 2000, "Dividends": 3000,
+                "InterestInc": 4000, "ProfitOnSaleFixedAsset": 5000,
+                "ProfitOnInvChrSTT": 6000, "ProfitOnOthInv": 7000,
+                "ProfitOnCurrFluct": 8000, "ProfitOnCnvInvntryToCapAsst": 9000,
+                "ProfitOnAgriIncome": 10000,
+                "OtherIncDtls": [{"NatureOfIncome": "Consulting", "Amount": 11000}],
+                "LiabilityWrittenBack": 12000, "AmtofInterest": 13000, "AmtofRem": 14000,
+                "MiscOthIncome": 15000, "TotOthIncome": 120000,
+            },
+        },
+        "DebitsToPL": {
+            "Freight": 1000, "ConsumptionOfStores": 2000, "PowerFuel": 3000,
+            "RentExpdr": 4000, "RepairsBldg": 5000, "RepairMach": 6000,
+            "EmployeeComp": {
+                "SalsWages": 100000, "Bonus": 5000, "MedExpReimb": 4000,
+                "LeaveEncash": 3000, "LeaveTravelBenft": 2000,
+                "ContToSuperAnnFund": 1000, "ContToPF": 12000, "ContToGratFund": 900,
+                "ContToOthFund": 800, "OthEmpBenftExpdr": 700,
+                "TotEmployeeComp": 129400,
+                "AnyCompPaidToNonRes": "N", "AmtPaidToNonRes": 0,
+            },
+            "Insurances": {"MedInsur": 1000, "LifeInsur": 2000, "KeyManInsur": 3000, "OthInsur": 4000, "TotInsurances": 10000},
+            "StaffWelfareExp": 1000, "Entertainment": 2000, "Hospitality": 3000,
+            "Conference": 4000, "SalePromoExp": 5000, "Advertisement": 6000,
+            "CommissionExpdrDtls": {"NonResOtherCompany": 100, "Others": 200, "Total": 300},
+            "RoyalityDtls": {"NonResOtherCompany": 400, "Others": 500, "Total": 900},
+            "ProfessionalConstDtls": {"NonResOtherCompany": 600, "Others": 700, "Total": 1300},
+            "HotelBoardLodge": 1000, "TravelExp": 2000, "ForeignTravelExp": 3000,
+            "ConveyanceExp": 4000, "TelephoneExp": 5000, "GuestHouseExp": 6000,
+            "ClubExp": 7000, "FestivalCelebExp": 8000, "Scholarship": 9000,
+            "Gift": 10000, "Donation": 11000,
+            "RatesTaxesPays": {"ExciseCustomsVAT": {
+                "UnionExciseDuty": 100, "ServiceTax": 200, "VATorSaleTax": 300,
+                "Cess": 400, "CentralGoodServiceTax": 500, "StateGoodServiceTax": 600,
+                "IntegratedGoodServiceTax": 700, "UnionTerrGoodServiceTax": 800,
+                "OthDutyTaxCess": 900, "TotExciseCustomsVAT": 4500,
+            }},
+            "AuditFee": 25000,
+            "OtherExpensesDtls": [{"ExpenseNature": "Cloud hosting", "Amount": 30000}],
+            "OtherExpenses": 30000,
+            "BadDebtDtls": {
+                "BadDebtAmtDtls": [{"PAN": "ABCDE1234F", "Amount": 150000}],
+                "BadDebtAmtDtlsTotal": 150000,
+                "OthersPANNotAvlblDtl": [{
+                    "Name": "Ravi Kumar", "FlatDoorBlockNumber": "12A",
+                    "PremisesBuildingName": "Sunrise", "RoadStreetPostOffice": "MG Road",
+                    "AreaLocality": "Shivaji Nagar", "TownCityDistrict": "Pune",
+                    "StateCode": "27", "CountryCode": "91", "PinCode": 411001,
+                    "Amount": 200000,
+                }],
+                "OthersPANNotAvlblDtlTotal": 200000,
+                "OthersAmtLt1Lakh": 50000,
+                "BadDebt": 400000,
+            },
+            "ProvForBadDoubtDebt": 10000, "OthProvisionsExpdr": 5000,
+            "PBIDTA": 252000,
+            "InterestExpdrtDtls": {"InterestExpdr": 7700, "NonResOtherCompany": 1200, "Others": 6500},
+            "DepreciationAmort": 9000, "PBT": 235300,
+        },
+        "TaxProvAppr": {
+            "ProvForCurrTax": 20000, "ProvDefTax": 5000, "ProfitAfterTax": 210300,
+            "BalBFPrevYr": 30000, "AmtAvlAppr": 240300, "TrfToReserves": 25000,
+            "ProprietorAccBalTrf": 215300,
+        },
+        "NoBooksOfAccPL": {
+            "GrossReceipt": 400000, "GrsRcptAccPayeeOrBankMode": 250000, "GrsRcptOtherMode": 150000,
+            "GrossProfit": 150000, "Expenses": 50000, "NetProfit": 100000,
+            "GrossReceiptPrf": 300000, "GrsRcptAccPayeeOrBankModePrf": 200000,
+            "GrsRcptOtherModePrf": 100000, "GrossProfitPrf": 120000,
+            "ExpensesPrf": 20000, "NetProfitPrf": 100000, "TotBusinessProfession": 200000,
+        },
+        "NatOfBus44AD": [{"NameOfBusiness": "Retail", "CodeAD": "01001", "Description": "Goods"}],
+        "PersumptiveInc44AD": {
+            "GrsTrnOverOrReceipt": 100000, "GrsTrnOverBank": 60000,
+            "GrsTotalTrnOverInCash": 30000, "GrsTrnOverAnyOthMode": 10000,
+            "TotPersumptiveInc44AD": 6000, "PersumptiveInc44AD6Per": 3600,
+            "PersumptiveInc44AD8Per": 2400,
+        },
+        "NatOfBus44ADA": [{"NameOfBusiness": "Consulting", "CodeADA": "14001", "Description": "Profession"}],
+        "PersumptiveInc44ADA": {
+            "GrsReceipt": 500000, "GrsTrnOverBank44ADA": 300000,
+            "GrsTotalTrnOverInCash44ADA": 150000, "GrsTrnOverAnyOthMode44ADA": 50000,
+            "TotPersumptiveInc44ADA": 250000,
+        },
+        "NatOfBus44AE": [{"NameOfBusiness": "Transport", "CodeAE": "11008", "Description": "Carriage"}],
+        "GoodsDtlsUs44AE": [{
+            "RegNumberGoodsCarriage": "MH01AB1234", "OwnedLeasedHiredFlag": "OWN",
+            "TonnageCapacity": 10, "HoldingPeriod": 12, "PresumptiveIncome": 90000,
+        }],
+        "TotalNumOfMonths": 12, "TotalPrsumptvIncUs44EGoods": 90000,
+        "TotalPrsumptvIncUs44E": 90000,
+        "NonResidentPL": {"GrossReceipt": 9000, "NetProfit": 1500},
+        "NonResidentPLDetails": [{"Section": "44B", "GrossReceipt": 9000, "NetProfit": 1500}],
+    }}
     typed_input, _ = draft_to_itr3_input(draft)
     document = build_itr3_json(compute_itr3(typed_input), typed_input)
-    pl = document["ITR"]["ITR3"]["PARTA_PL"]
-    assert pl["GrossProfit"] == 240000
-    assert pl["Expenditure"] == 90000
-    assert pl["NetIncomeFrmSpecActivity"] == 12000
-    assert pl["TurnverFrmSpecActivity"] == 300000
+    payload = document["ITR"]["ITR3"]["PARTA_PL"]
+    _validate_against_schema_definition(payload, "PARTA_PL")
+    assert payload["DebitsToPL"]["EmployeeComp"]["SalsWages"] == 100000
+    assert payload["DebitsToPL"]["EmployeeComp"]["AnyCompPaidToNonRes"] == "N"
+    assert payload["DebitsToPL"]["RatesTaxesPays"]["ExciseCustomsVAT"]["Cess"] == 400
+    assert payload["DebitsToPL"]["BadDebtDtls"]["OthersPANNotAvlblDtl"][0]["TownCityDistrict"] == "Pune"
+    assert payload["CreditsToPL"]["OthIncome"]["OtherIncDtls"][0]["Amount"] == 11000
+    assert payload["GoodsDtlsUs44AE"][0]["RegNumberGoodsCarriage"] == "MH01AB1234"
+    assert payload["NonResidentPLDetails"][0]["Section"] == "44B"
+
+
+def test_itr3_parta_pl_optional_blocks_omitted_when_absent() -> None:
+    """Schedule 8: a filer with no presumptive/non-resident/detail-row data
+    must not get fabricated optional PARTA_PL blocks -- optional arrays and
+    sub-objects are omitted entirely, while the schema-required blocks are
+    still emitted (they are required, unlike the optional disclosures)."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    draft = _draft_with_business()
+    draft.itr3BusinessWorkspace.core = {"PARTA_PL": {
+        "GrossProfit": 240000, "Expenditure": 108000,
+        "NetIncomeFrmSpecActivity": 12000, "TurnverFrmSpecActivity": 300000,
+    }}
+    typed_input, _ = draft_to_itr3_input(draft)
+    payload = build_itr3_json(compute_itr3(typed_input), typed_input)["ITR"]["ITR3"]["PARTA_PL"]
+
+    # Required blocks always present.
+    for required in ("CreditsToPL", "DebitsToPL", "TaxProvAppr", "NoBooksOfAccPL",
+                     "TurnverFrmSpecActivity", "NetIncomeFrmSpecActivity"):
+        assert required in payload, required
+    # Optional blocks absent -- never emitted as fabricated evidence.
+    for optional in ("GoodsDtlsUs44AE", "NonResidentPL", "NonResidentPLDetails",
+                     "NatOfBus44AD", "NatOfBus44ADA", "NatOfBus44AE",
+                     "PersumptiveInc44AD", "PersumptiveInc44ADA"):
+        assert optional not in payload, optional
+    # Optional arrays inside required blocks are likewise omitted.
+    assert "OtherIncDtls" not in payload["CreditsToPL"]["OthIncome"]
+    assert "OtherExpensesDtls" not in payload["DebitsToPL"]
+    assert "BadDebtAmtDtls" not in payload["DebitsToPL"]["BadDebtDtls"]
+    assert "OthersPANNotAvlblDtl" not in payload["DebitsToPL"]["BadDebtDtls"]
+    _validate_against_schema_definition(payload, "PARTA_PL")
+
+
+def test_itr3_parta_pl_negative_capable_fields_preserved() -> None:
+    """Schedule 8: fields the official schema leaves without a minimum (gross
+    profit, PBIDTA, PBT, appropriation balances, non-resident net profit) must
+    accept and preserve a genuine negative figure rather than clamping to 0,
+    while positive-only fields still reject it."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+    from app.schemas.itr3 import PLPLPLPartACreditsToPLOthIncome, PLPLPartADebitsToPL
+
+    draft = _draft_with_business()
+    draft.itr3BusinessWorkspace.core = {"PARTA_PL": {
+        "CreditsToPL": {"OthIncome": {"ProfitOnCurrFluct": -25000, "TotOthIncome": -25000}},
+        "DebitsToPL": {"PBIDTA": -40000, "PBT": -55000},
+        "NoBooksOfAccPL": {"GrossProfitPrf": -3000},
+        "NonResidentPL": {"GrossReceipt": 9000, "NetProfit": 1500},
+    }}
+    typed_input, _ = draft_to_itr3_input(draft)
+    payload = build_itr3_json(compute_itr3(typed_input), typed_input)["ITR"]["ITR3"]["PARTA_PL"]
+    assert payload["CreditsToPL"]["OthIncome"]["ProfitOnCurrFluct"] == -25000
+    assert payload["DebitsToPL"]["PBIDTA"] == -40000
+    assert payload["DebitsToPL"]["PBT"] == -55000
+    assert payload["NoBooksOfAccPL"]["GrossProfitPrf"] == -3000
+    _validate_against_schema_definition(payload, "PARTA_PL")
+
+    # Positive-only official fields still reject a negative value.
+    with pytest.raises(Exception):
+        PLPLPLPartACreditsToPLOthIncome(RentInc=-1)
+    with pytest.raises(Exception):
+        PLPLPLPartADebitsToPL(Freight=-1)
 
 
 def test_itr3_builder_maps_parta_gen2_workspace() -> None:
