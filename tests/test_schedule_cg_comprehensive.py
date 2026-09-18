@@ -878,10 +878,28 @@ def test_pti_capital_gains_not_run_through_cyla(form) -> None:
     eligible for CYLA/BFLA loss set-off -- an unrelated large LTCG loss
     elsewhere in the return must not reduce PTI's own taxed amount."""
     loss_txn = _txn(CGAssetType.OTHER, D("100000"), D("2000000"), explicit_long_term=True)  # LTCG loss
-    pti = PTIEntry(entity_name="AIF", entity_pan="ABCDE1234F", income_head="STCG", section="30", income_amount=D("150000"))
+    pti = PTIEntry(entity_name="AIF", entity_pan="ABCDE1234F", income_head="STCG", section="111A", income_amount=D("150000"))
     r = _compute(form, cg_transactions=[loss_txn], pti_entries=[pti])
     si = _si(r)
-    assert si["PTI_STCG30P"].tax_amount == D("45000")  # 150000 * 30%, untouched by the LTCG loss
+    assert si["PTI_STCG20P"].tax_amount == D("30000")  # 150000 * 20%, untouched by the LTCG loss
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_pti_applicable_rate_stcg_flows_to_slab_not_flat_30(form) -> None:
+    """Cross-form issue #12 (tracker): the official schema has no
+    dedicated SecCode for PTI STCG "chargeable at applicable rates" (only
+    PTI_STCG20P/PTI_STCG30P exist) -- so a PTI STCG entry not tagged
+    "111A" must fall through to ordinary SLAB-rate taxation, not a
+    hardcoded flat 30% (the pre-existing bug this fix corrects, present
+    in ITR-2's own already-shipped code and replicated into ITR-3 by this
+    session's own earlier item-11 port)."""
+    pti = PTIEntry(entity_name="AIF", entity_pan="ABCDE1234F", income_head="STCG", section="115UB", income_amount=D("1000000"))
+    r = _compute(form, pti_entries=[pti])
+    si = _si(r)
+    assert "PTI_STCG30P" not in si
+    assert r.capital_gains_income == D("1000000")
+    assert r.special_rate_tax == D("0")
+    assert r.slab_tax > D("0")
 
 
 # ===========================================================================

@@ -888,9 +888,35 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # to Schedule SI, ported verbatim from ITR-2's own already-working
     # calculator (calculators/itr2.py) -- both forms share the identical
     # PTIEntry.section-based rate routing.
+    #
+    # Cross-form issue #12 (tracker): item A8a/A8b/A8c on the official
+    # form shows THREE PTI-STCG buckets -- 20% (111A), 30%, and
+    # "chargeable at applicable rates" -- but the official schema's own
+    # SecCode enum has only TWO PTI capital-gains codes for STCG at all
+    # (`PTI_STCG20P`/`PTI_STCG30P`; confirmed by a full grep of every
+    # PTI_* SecCode in the schema): no dedicated code exists for
+    # "applicable rate" PTI STCG. That bucket is therefore ordinary
+    # SLAB-rate income (matching how this codebase already treats every
+    # other "applicable rate" CG bucket, e.g.
+    # `cg_buyback_loss_stcg_applicable` merging into the plain slab-rate
+    # `stcg_other` accumulator, never given a special SI entry) --
+    # `PTIEntry.section`'s own real-world STCG values (111A vs the
+    # business-trust/investment-fund codes 115UA/115UB/115U/115T)
+    # identify WHICH TYPE of pass-through vehicle the income came from,
+    # not a tax rate, so there is no reliable signal here for a genuine
+    # flat-30% case. `compute_pti_stcg30()`/`PTI_STCG30P` therefore stay
+    # unused pending a real, verified 30%-triggering scenario. Omitting
+    # the SI entry for this bucket is sufficient and correct: this
+    # session's own item-11 fix already adds `pti_cg_gross` directly to
+    # `r.capital_gains_income`/`ti`, and `si_result.total_special_rate_
+    # income` (## 12, below) only excludes amounts that actually got an
+    # SI entry -- so this rupee automatically flows into
+    # `normal_income`/`slab_tax` instead. Ported from the identical fix
+    # in ITR-2's own calculator (which also documents this same
+    # "no SI entry -> falls through to slab rate" mechanism for its
+    # OS-head PTI dispatch).
     from app.engine.schedules.special_rates import (
         compute_pti_stcg20 as _compute_pti_stcg20,
-        compute_pti_stcg30 as _compute_pti_stcg30,
         compute_pti_ltcg112a as _compute_pti_ltcg112a,
         compute_pti_ltcg125 as _compute_pti_ltcg125,
     )
@@ -898,8 +924,6 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         if pti.income_amount > 0:
             if pti.income_head == "STCG" and pti.section == "111A":
                 si_entries.append(_compute_pti_stcg20(pti.income_amount))
-            elif pti.income_head == "STCG":
-                si_entries.append(_compute_pti_stcg30(pti.income_amount))
             elif pti.income_head == "LTCG" and "112A" in pti.section.upper():
                 si_entries.append(_compute_pti_ltcg112a(pti.income_amount))
             elif pti.income_head == "LTCG":

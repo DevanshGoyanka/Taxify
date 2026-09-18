@@ -5997,9 +5997,63 @@ def test_schedule_cg_a7_pti_stcg_is_reflected_in_total_stcg() -> None:
     _assert_schema_valid(document)
     stcg = document["ITR"]["ITR2"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
     assert stcg["PassThrIncNatureSTCG20Per"] == 40000
-    assert stcg["PassThrIncNatureSTCG30Per"] == 60000
+    # Non-111A PTI STCG has no dedicated "applicable rate" SecCode, so it's
+    # taxed at slab rate (cross-form issue #12) and disclosed under
+    # "AppRate", not the genuine-flat-30%-only "30Per" bucket.
+    assert stcg["PassThrIncNatureSTCG30Per"] == 0
+    assert stcg["PassThrIncNatureSTCGAppRate"] == 60000
     assert stcg["PassThrIncNatureSTCG"] == 100000
     assert stcg["TotalSTCG"] == 100000
+
+
+def test_pti_stcg_applicable_rate_blended_into_app_rate_bucket_not_flat_30() -> None:
+    """Cross-form issue #12 (tracker), builder half: once the calculator
+    stopped taxing non-111A PTI STCG at a fabricated flat 30% (no dedicated
+    official SecCode exists for "PTI STCG at applicable rates"; it falls
+    through to slab rate instead), every builder function that blends PTI
+    CG into Schedule CG's rate buckets (`_pti_cg_by_bucket()`, consumed by
+    Schedule CYLA, Schedule BFLA, Table F's quarterly breakup, and Part
+    B-TI's own CapGain block) must route it into the "applicable rate"
+    bucket too, not the "30%" bucket reserved for a genuine flat rate --
+    confirmed live (2026-09-14, Type-2 UAT validateItr, PAN GOYPT2026A) for
+    the identical ordinary-STCG "stcg30 vs stcg_app" bucket distinction."""
+    input_data = _input(
+        pti_entries=[
+            PTIEntry(
+                entity_name="Example InvIT", entity_pan="AAAAT1234E",
+                income_head="STCG", section="111A", income_amount=Decimal("40000"),
+            ),
+            PTIEntry(
+                entity_name="Example InvIT", entity_pan="AAAAT1234E",
+                income_head="STCG", section="OTH", income_amount=Decimal("60000"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    itr2 = document["ITR"]["ITR2"]
+
+    cyla = itr2["ScheduleCYLA"]
+    assert cyla["STCG20Per"]["IncCYLA"]["IncOfCurYrUnderThatHead"] == 40000
+    assert cyla["STCG30Per"]["IncCYLA"]["IncOfCurYrUnderThatHead"] == 0
+    assert cyla["STCGAppRate"]["IncCYLA"]["IncOfCurYrUnderThatHead"] == 60000
+
+    bfla = itr2["ScheduleBFLA"]
+    assert bfla["STCG20Per"]["IncBFLA"]["IncOfCurYrUndHeadFromCYLA"] == 40000
+    assert bfla["STCG30Per"]["IncBFLA"]["IncOfCurYrUndHeadFromCYLA"] == 0
+    assert bfla["STCGAppRate"]["IncBFLA"]["IncOfCurYrUndHeadFromCYLA"] == 60000
+
+    table_f = itr2["ScheduleCGFor23"]["AccruOrRecOfCG"]
+    assert table_f["ShortTermUnder30Per"]["DateRange"]["Upto15Of6"] == 0
+    assert table_f["ShortTermUnderAppRate"]["DateRange"]["Upto15Of6"] == 0
+    # Both PTI STCG amounts are placed in the last quarter (no per-
+    # transaction transfer date exists for a pass-through attribution).
+    assert table_f["ShortTermUnderAppRate"]["DateRange"]["Up16Of3To31Of3"] == 60000
+
+    part_b_ti = itr2["PartB-TI"]["CapGain"]["ShortTerm"]
+    assert part_b_ti["ShortTerm20Per"] == 40000
+    assert part_b_ti["ShortTerm30Per"] == 0
+    assert part_b_ti["ShortTermAppRate"] == 60000
 
 
 def test_schedule_cg_b10_pti_ltcg_is_reflected_in_total_ltcg() -> None:

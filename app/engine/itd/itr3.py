@@ -2324,11 +2324,20 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
     # loss and remaining ledgers are disclosed; set-off totals stay zero.
     current_loss_rows.update({
         "InStcg20Per": {"CurrYearIncome": _to_rupees(pti_stcg_111a), "StclSetoff30Per": 0, "StclSetoffAppRate": 0, "StclSetoffDTAARate": 0, "CurrYrCapGain": _to_rupees(pti_stcg_111a)},
-        "InStcg30Per": {"CurrYearIncome": _to_rupees(pti_stcg - pti_stcg_111a), "StclSetoff20Per": 0, "StclSetoffAppRate": 0, "StclSetoffDTAARate": 0, "CurrYrCapGain": _to_rupees(pti_stcg - pti_stcg_111a)},
-        "InStcgAppRate": {"CurrYearIncome": 0, "StclSetoff20Per": 0, "StclSetoff30Per": 0, "StclSetoffDTAARate": 0, "CurrYrCapGain": 0},
+        "InStcg30Per": {"CurrYearIncome": 0, "StclSetoff20Per": 0, "StclSetoffAppRate": 0, "StclSetoffDTAARate": 0, "CurrYrCapGain": 0},
+        "InStcgAppRate": {"CurrYearIncome": _to_rupees(pti_stcg - pti_stcg_111a), "StclSetoff20Per": 0, "StclSetoff30Per": 0, "StclSetoffDTAARate": 0, "CurrYrCapGain": _to_rupees(pti_stcg - pti_stcg_111a)},
         "InStcgDTAARate": {"CurrYearIncome": 0, "StclSetoff20Per": 0, "StclSetoff30Per": 0, "StclSetoffAppRate": 0, "CurrYrCapGain": 0},
-        "InLtcg12_5Per": {"CurrYearIncome": _to_rupees(pti_ltcg_112a), "StclSetoff20Per": 0, "StclSetoff30Per": 0, "StclSetoffAppRate": 0, "StclSetoffDTAARate": 0, "LtclSetOffDTAARate": 0, "CurrYrCapGain": _to_rupees(pti_ltcg_112a)},
-        "InLtcgDTAARate": {"CurrYearIncome": _to_rupees(pti_ltcg - pti_ltcg_112a), "StclSetoff20Per": 0, "StclSetoff30Per": 0, "StclSetoffAppRate": 0, "StclSetoffDTAARate": 0, "LtclSetOff12_5Per": 0, "CurrYrCapGain": _to_rupees(pti_ltcg - pti_ltcg_112a)},
+        # Schedule CYLA does not split section-112A LTCG from other 12.5%-
+        # rate LTCG the way Schedule CG's own Table A/B do -- both share the
+        # single "InLtcg12_5Per" row (confirmed against ITR-2's own
+        # equivalent `_pti_cg_by_bucket()`, which combines both into one
+        # "ltcg125" bucket with no separate "other" key at all). Non-112A
+        # PTI LTCG must NOT be disclosed under "InLtcgDTAARate" -- it is not
+        # DTAA-rate income, it is ordinary flat-12.5% PTI LTCG (taxed via
+        # `compute_pti_ltcg125()`, a genuine, distinct SecCode from 112A's
+        # own, but the same 12.5% *rate bucket* for CYLA purposes).
+        "InLtcg12_5Per": {"CurrYearIncome": _to_rupees(pti_ltcg), "StclSetoff20Per": 0, "StclSetoff30Per": 0, "StclSetoffAppRate": 0, "StclSetoffDTAARate": 0, "LtclSetOffDTAARate": 0, "CurrYrCapGain": _to_rupees(pti_ltcg)},
+        "InLtcgDTAARate": {"CurrYearIncome": 0, "StclSetoff20Per": 0, "StclSetoff30Per": 0, "StclSetoffAppRate": 0, "StclSetoffDTAARate": 0, "LtclSetOff12_5Per": 0, "CurrYrCapGain": 0},
     })
 
     pass_stcg = _to_rupees(pti_stcg)
@@ -2435,7 +2444,7 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         **({"UnutilizedCg": stcg_unutilized["UnutilizedCg"]} if stcg_unutilized["UnutilizedCg"] else {}),
         "AmtDeemedStcg": stcg_unutilized["AmtDeemed"], "TotalAmtDeemedStcg": stcg_unutilized["TotalAmtDeemed"],
         "SlumpSaleInStcg": stcg_slump_sale_block,
-        "PassThrIncNatureSTCG": pass_stcg, "PassThrIncNatureSTCG20Per": pass_stcg_111a, "PassThrIncNatureSTCG30Per": pass_stcg_other, "PassThrIncNatureSTCGAppRate": 0,
+        "PassThrIncNatureSTCG": pass_stcg, "PassThrIncNatureSTCG20Per": pass_stcg_111a, "PassThrIncNatureSTCG30Per": 0, "PassThrIncNatureSTCGAppRate": pass_stcg_other,
         **({"NRICgDTAA": {"NRIDTAADtls": stcg_dtaa_rows}} if stcg_dtaa_rows else {}),
         "TotalAmtNotTaxUsDTAAStcg": _to_rupees(stcg_dtaa_not_chargeable), "TotalAmtTaxUsDTAAStcg": _to_rupees(stcg_dtaa_chargeable),
         **({"CapitalLossBuyBackShares": stcg_buyback_loss_block} if stcg_buyback_loss_block else {}),

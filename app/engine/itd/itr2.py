@@ -454,11 +454,14 @@ def _schedule_cyla(result: ITR2Result, input_data: Optional[ITR2Input] = None) -
     # to BOTH columns identically (col1 AND col4) since no loss is ever set
     # off against a PTI amount here (see `_pti_cg_by_bucket()`'s own
     # docstring for why this is substantively correct, not just a
-    # disclosure fix).
+    # disclosure fix). Non-111A PTI STCG lands in "stcg_app", NOT "stcg30"
+    # -- see `_pti_cg_by_bucket()`'s own docstring (cross-form issue #12,
+    # fixed 2026-09-19: no dedicated SecCode for PTI STCG at applicable
+    # rates, so it's taxed at slab rate, not a fabricated flat 30%).
     _pti = _pti_cg_by_bucket(input_data)
     stcg20_inc = cg_intra_remaining.get("stcg20", z) + _pti["stcg20"]
-    stcg30_inc = cg_intra_remaining.get("stcg30", z) + _pti["stcg30"]
-    stcg_app_inc = cg_intra_remaining.get("stcg_app", z)
+    stcg30_inc = cg_intra_remaining.get("stcg30", z)
+    stcg_app_inc = cg_intra_remaining.get("stcg_app", z) + _pti["stcg_app"]
     stcg_dtaa_inc = cg_intra_remaining.get("stcg_dtaa", z)
     ltcg125_inc = cg_intra_remaining.get("ltcg125", z) + _pti["ltcg125"]
     ltcg_dtaa_inc = cg_intra_remaining.get("ltcg_dtaa", z)
@@ -471,8 +474,8 @@ def _schedule_cyla(result: ITR2Result, input_data: Optional[ITR2Input] = None) -
     # with what the return actually gets taxed on (before BFLA's further,
     # separate brought-forward-loss stage). Same PTI addition as col1 above.
     stcg20_after = (getattr(cyla, "stcg20_remaining", z) if cyla else z) + _pti["stcg20"]
-    stcg30_after = (getattr(cyla, "stcg30_remaining", z) if cyla else z) + _pti["stcg30"]
-    stcg_app_after = getattr(cyla, "stcg_app_remaining", z) if cyla else z
+    stcg30_after = getattr(cyla, "stcg30_remaining", z) if cyla else z
+    stcg_app_after = (getattr(cyla, "stcg_app_remaining", z) if cyla else z) + _pti["stcg_app"]
     stcg_dtaa_after = getattr(cyla, "stcg_dtaa_remaining", z) if cyla else z
     ltcg125_after = (getattr(cyla, "ltcg125_remaining", z) if cyla else z) + _pti["ltcg125"]
     ltcg_dtaa_after = getattr(cyla, "ltcg_dtaa_remaining", z) if cyla else z
@@ -550,10 +553,12 @@ def _schedule_bfla(result: ITR2Result, input_data: Optional[ITR2Input] = None) -
     # schedule CYLA" (i.e. THIS same Schedule CYLA column-4 figure, which
     # now includes PTI CG), so BFLA must carry the identical PTI amount
     # forward or it would disagree with its own declared CYLA source.
+    # Non-111A PTI STCG lands in "stcg_app", not "stcg30" -- see
+    # `_pti_cg_by_bucket()`'s own docstring.
     _pti = _pti_cg_by_bucket(input_data)
     stcg20_cyla = _positive_val(cyla, "stcg20_remaining") + _pti["stcg20"] if cyla else _pti["stcg20"]
-    stcg30_cyla = _positive_val(cyla, "stcg30_remaining") + _pti["stcg30"] if cyla else _pti["stcg30"]
-    stcg_app_cyla = _positive_val(cyla, "stcg_app_remaining") if cyla else z
+    stcg30_cyla = _positive_val(cyla, "stcg30_remaining") if cyla else z
+    stcg_app_cyla = (_positive_val(cyla, "stcg_app_remaining") + _pti["stcg_app"]) if cyla else _pti["stcg_app"]
     stcg_dtaa_cyla = _positive_val(cyla, "stcg_dtaa_remaining") if cyla else z
     ltcg125_cyla = _positive_val(cyla, "ltcg125_remaining") + _pti["ltcg125"] if cyla else _pti["ltcg125"]
     ltcg_dtaa_cyla = _positive_val(cyla, "ltcg_dtaa_remaining") if cyla else z
@@ -561,8 +566,8 @@ def _schedule_bfla(result: ITR2Result, input_data: Optional[ITR2Input] = None) -
     # Residual after BFLA -- no brought-forward loss ever sets off against a
     # PTI amount either, so the same addition carries through unchanged.
     stcg20_after = (_positive_val(bfla, "stcg20_remaining") + _pti["stcg20"]) if bfla else stcg20_cyla
-    stcg30_after = (_positive_val(bfla, "stcg30_remaining") + _pti["stcg30"]) if bfla else stcg30_cyla
-    stcg_app_after = _positive_val(bfla, "stcg_app_remaining") if bfla else stcg_app_cyla
+    stcg30_after = _positive_val(bfla, "stcg30_remaining") if bfla else stcg30_cyla
+    stcg_app_after = (_positive_val(bfla, "stcg_app_remaining") + _pti["stcg_app"]) if bfla else stcg_app_cyla
     stcg_dtaa_after = _positive_val(bfla, "stcg_dtaa_remaining") if bfla else stcg_dtaa_cyla
     ltcg125_after = (_positive_val(bfla, "ltcg125_remaining") + _pti["ltcg125"]) if bfla else ltcg125_cyla
     ltcg_dtaa_after = _positive_val(bfla, "ltcg_dtaa_remaining") if bfla else ltcg_dtaa_cyla
@@ -1675,9 +1680,25 @@ def _pti_cg_by_bucket(input_data: Optional[ITR2Input]) -> dict[str, Decimal]:
     ordinary current-year capital loss of the same rate setting off against
     a PTI CG gain, so blending it into the matching rate bucket here is
     substantively correct, not just a disclosure convenience.
+
+    Non-111A PTI STCG goes into "stcg_app" (applicable/slab rate), NOT
+    "stcg30" -- Cross-form issue #12 (tracker): the official schema has no
+    dedicated SecCode for "PTI STCG chargeable at applicable rates" (only
+    PTI_STCG20P/PTI_STCG30P exist), so `calculators/itr2.py`'s own
+    Schedule-SI dispatch deliberately emits no SI entry for it, letting it
+    fall through to ordinary slab-rate taxation instead of a fabricated
+    flat 30%. This bucket assignment must match that actual tax treatment
+    -- the "stcg30" bucket is reserved exclusively for a genuine flat-30%
+    rate (confirmed live, 2026-09-14, Type-2 UAT validateItr, PAN
+    GOYPT2026A, errCd ITR2_INF26_InStcg30Per_CurrYearIncome, for the
+    unrelated-but-identical-bucket ordinary-STCG case -- see
+    `calculators/itr2.py`'s own comment on this exact bucket for the full
+    citation), is_fii_fpi-independent since a real FII/FPI assessee never
+    has this kind of pass-through PTI STCG blended into the same basket in
+    practice.
     """
     z = _ZERO
-    stcg20 = stcg30 = ltcg125 = z
+    stcg20 = stcg_app = ltcg125 = z
     if input_data is not None:
         for pti in input_data.pti_entries:
             if pti.income_amount <= 0:
@@ -1685,10 +1706,10 @@ def _pti_cg_by_bucket(input_data: Optional[ITR2Input]) -> dict[str, Decimal]:
             if pti.income_head == "STCG" and pti.section == "111A":
                 stcg20 += pti.income_amount
             elif pti.income_head == "STCG":
-                stcg30 += pti.income_amount
+                stcg_app += pti.income_amount
             elif pti.income_head == "LTCG":
                 ltcg125 += pti.income_amount
-    return {"stcg20": stcg20, "stcg30": stcg30, "ltcg125": ltcg125}
+    return {"stcg20": stcg20, "stcg_app": stcg_app, "ltcg125": ltcg125}
 
 
 def _cg_loss_setoff_table(result: ITR2Result, input_data: Optional[ITR2Input] = None) -> dict[str, Any]:
@@ -2127,20 +2148,26 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
     pti_ltcg_total = pti_ltcg_112a + pti_ltcg_other
 
     # Schedule CG item A7 -- pass-through STCG (Schedule PTI), split 20%/
-    # 30%/applicable-rate exactly as the calculator's own SI dispatch does
-    # (compute()'s `pti_entries` loop: `section == "111A"` -> 20%, any other
-    # STCG section -> 30%; this codebase has no applicable-rate PTI STCG
-    # bucket). This income was already taxed correctly via Schedule SI
-    # regardless, but A7/A9 previously stayed hardcoded at 0 even when real
-    # PTI STCG existed, so Schedule CG's own disclosed total silently
-    # omitted income the return was genuinely taxed on.
+    # applicable-rate exactly as the calculator's own SI dispatch does
+    # (compute()'s `pti_entries` loop: `section == "111A"` -> 20% via a
+    # dedicated Schedule-SI entry; any other STCG section gets NO Schedule-SI
+    # entry at all -- there is no dedicated official SecCode for "PTI STCG
+    # chargeable at applicable rates", only PTI_STCG20P/PTI_STCG30P exist --
+    # so it falls through to ordinary SLAB-rate taxation instead. Disclosed
+    # here under the "applicable rate" bucket (not "30%") to match that
+    # actual tax treatment; see calculators/itr2.py's own comment on this
+    # same dispatch for the full rationale). This income was already taxed
+    # correctly via Schedule SI/slab regardless, but A7/A9 previously stayed
+    # hardcoded at 0 even when real PTI STCG existed, so Schedule CG's own
+    # disclosed total silently omitted income the return was genuinely taxed
+    # on.
     pti_stcg_20 = sum(
         (e.income_amount for e in input_data.pti_entries if e.income_head == "STCG" and e.section == "111A"), _ZERO,
     )
-    pti_stcg_30 = sum(
+    pti_stcg_app_rate = sum(
         (e.income_amount for e in input_data.pti_entries if e.income_head == "STCG" and e.section != "111A"), _ZERO,
     )
-    pti_stcg_total = pti_stcg_20 + pti_stcg_30
+    pti_stcg_total = pti_stcg_20 + pti_stcg_app_rate
 
     stcg_block: dict[str, Any] = {
         "SaleofLandBuild": {"SaleofLandBuildDtls": stcg_land_rows},
@@ -2167,8 +2194,8 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         "TotalAmtDeemedStcg": _to_rupees(input_data.deemed_stcg_unutilized_cgas),
         "PassThrIncNatureSTCG": _to_rupees(pti_stcg_total),
         "PassThrIncNatureSTCG20Per": _to_rupees(pti_stcg_20),
-        "PassThrIncNatureSTCG30Per": _to_rupees(pti_stcg_30),
-        "PassThrIncNatureSTCGAppRate": 0,
+        "PassThrIncNatureSTCG30Per": 0,
+        "PassThrIncNatureSTCGAppRate": _to_rupees(pti_stcg_app_rate),
         **({"NRICgDTAA": {"NRIDTAADtls": stcg_dtaa_rows}} if stcg_dtaa_rows else {}),
         "TotalAmtNotTaxUsDTAAStcg": _to_rupees(stcg_dtaa_not_chargeable),
         "TotalAmtTaxUsDTAAStcg": _to_rupees(stcg_dtaa_chargeable),
@@ -2639,18 +2666,21 @@ def _accrued_cg(input_data: ITR2Input, result: ITR2Result) -> dict[str, Any]:
     # ITR2_INF26_AccruOrRecOfCG_LongTermUnder12_5Per_DateRange, "Table F Sl.
     # No. 5 the breakup of all the quarters is not equal to the value from
     # item 3vii of Schedule BFLA".
-    # Note: PTI STCG@30% goes to the literal "stcg30" bucket unconditionally
-    # (NOT `_other_stcg_bucket`'s is_fii_fpi routing) -- `compute_pti_stcg30()`
-    # dispatches it to the genuine flat-30% PTI_STCG30P SecCode regardless of
-    # the taxpayer's own FII/FPI status (it is the pass-through fund's own
-    # rate, not derived from this taxpayer's residency/FII classification),
-    # matching the identical unconditional "stcg30" bucket already used for
-    # it in `_schedule_cyla()` and `_cg_loss_setoff_table()` (Table E).
+    # Note: non-111A PTI STCG goes to the literal "stcg_app" bucket
+    # unconditionally (NOT `_other_stcg_bucket`'s is_fii_fpi routing) --
+    # there is no dedicated official SecCode for "PTI STCG chargeable at
+    # applicable rates" (only PTI_STCG20P/PTI_STCG30P exist), so the
+    # calculator's own Schedule-SI dispatch omits an SI entry for it,
+    # letting it fall through to ordinary slab-rate taxation regardless of
+    # the taxpayer's own FII/FPI status -- matching the identical
+    # unconditional "stcg_app" bucket used for it in `_schedule_cyla()` and
+    # `_cg_loss_setoff_table()` (Table E). See `_pti_cg_by_bucket()`'s own
+    # docstring (cross-form issue #12).
     _pti = _pti_cg_by_bucket(input_data)
     if _pti["stcg20"] > _ZERO:
         buckets["stcg20"][4] += _pti["stcg20"]
-    if _pti["stcg30"] > _ZERO:
-        buckets["stcg30"][4] += _pti["stcg30"]
+    if _pti["stcg_app"] > _ZERO:
+        buckets["stcg_app"][4] += _pti["stcg_app"]
     if _pti["ltcg125"] > _ZERO:
         buckets["ltcg125"][4] += _pti["ltcg125"]
 
@@ -3774,20 +3804,25 @@ def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
         "5AD1biip": "5AD1biip", "5ADii": "5ADii",
         "5ADiii": "5ADiii", "5ADiiiP": "5ADiiiP",
         # Schedule PTI capital-gains pass-through codes (compute_pti_stcg20/
-        # compute_pti_stcg30/compute_pti_ltcg112a/compute_pti_ltcg125 in
-        # special_rates.py already set entry.section to the exact official
-        # SecCode string) -- these were previously ABSENT from this map
-        # entirely, so every PTI CG entry silently fell through to the "1"
-        # default (the SecCode for section 111, accumulated PF), which made
-        # ITD's live validator wrongly cross-check the PTI row's tax amount
-        # against Schedule OS item 2c (TaxAccumulatedBalRecPF) -- confirmed
-        # live (2026-09-14, Type-2 UAT validateItr, PAN GOYPT2026A,
+        # compute_pti_ltcg112a/compute_pti_ltcg125 in special_rates.py
+        # already set entry.section to the exact official SecCode string) --
+        # these were previously ABSENT from this map entirely, so every PTI
+        # CG entry silently fell through to the "1" default (the SecCode for
+        # section 111, accumulated PF), which made ITD's live validator
+        # wrongly cross-check the PTI row's tax amount against Schedule OS
+        # item 2c (TaxAccumulatedBalRecPF) -- confirmed live (2026-09-14,
+        # Type-2 UAT validateItr, PAN GOYPT2026A,
         # ITR2.ScheduleSI.SplCodeRateTax.SplRateIncTax -- "In Schedule SI,
         # Sl. No. 1(ii) is not equal to Sl. No. 2(c) of Schedule OS") and
         # against the official schema's own SecCode enum (`PTI_STCG20P`,
         # `PTI_STCG30P`, `PTI_LTCG12_5P112A`, `PTI_LTCG12_5P` are real,
         # distinct enum members, not aliases of "1"). Identity mapping, same
-        # rationale as the blocks above.
+        # rationale as the blocks above. `PTI_STCG30P` is kept here even
+        # though nothing emits it today (cross-form issue #12, fixed
+        # 2026-09-19: non-111A PTI STCG no longer gets a flat-30% SI entry,
+        # it falls through to slab rate instead) -- a harmless dead mapping,
+        # not a bug, since an unused map key never forces anything to be
+        # produced.
         "PTI_STCG20P": "PTI_STCG20P", "PTI_STCG30P": "PTI_STCG30P",
         "PTI_LTCG12_5P112A": "PTI_LTCG12_5P112A", "PTI_LTCG12_5P": "PTI_LTCG12_5P",
     }
@@ -5085,10 +5120,12 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     stcg_111a = _to_rupees(post_loss.get("111a", _ZERO)) + _to_rupees(_pti["stcg20"])
     stcg_normal = _to_rupees(post_loss.get("normal_stcg", _ZERO))
     stcg_20 = stcg_111a
-    # PTI STCG@30% goes to the literal "stcg30" line unconditionally, same
-    # is_fii_fpi-independent reasoning as `_schedule_cyla()`/Table E/Table F.
-    stcg_30 = (stcg_normal if is_fii_fpi else 0) + _to_rupees(_pti["stcg30"])
-    stcg_app_rate = 0 if is_fii_fpi else stcg_normal
+    stcg_30 = stcg_normal if is_fii_fpi else 0
+    # Non-111A PTI STCG goes to the literal "stcg_app" line unconditionally,
+    # same is_fii_fpi-independent reasoning as `_schedule_cyla()`/Table E/
+    # Table F -- see `_pti_cg_by_bucket()`'s own docstring (cross-form issue
+    # #12).
+    stcg_app_rate = (0 if is_fii_fpi else stcg_normal) + _to_rupees(_pti["stcg_app"])
     ltcg_112 = _to_rupees(post_loss.get("112", _ZERO)) + _to_rupees(_pti["ltcg125"])
     # "112a_gross", NOT "112a_taxable": Part B-TI item 3b(i) is literally
     # defined by the form as "8vi of item E of schedule CG" -- Table E's

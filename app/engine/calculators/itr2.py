@@ -1372,16 +1372,43 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         compute_115bba as _compute_115bba,
         compute_111 as _compute_111,
         compute_pti_stcg20 as _compute_pti_stcg20,
-        compute_pti_stcg30 as _compute_pti_stcg30,
         compute_pti_ltcg112a as _compute_pti_ltcg112a,
         compute_pti_ltcg125 as _compute_pti_ltcg125,
     )
     for pti in input_data.pti_entries:
         if pti.income_amount > 0:
+            # Item A7a/A7b/A7c (ITR-2) / A8a/A8b/A8c (ITR-3) on the official
+            # form show THREE PTI-STCG buckets -- 20% (111A), 30%, and
+            # "chargeable at applicable rates" -- but the official schema's
+            # own SecCode enum has only TWO PTI capital-gains codes for
+            # STCG at all (`PTI_STCG20P`/`PTI_STCG30P`; confirmed by a full
+            # grep of every PTI_* SecCode in the schema): no dedicated code
+            # exists for "applicable rate" PTI STCG. That bucket is
+            # therefore ordinary SLAB-rate income (matching how this
+            # codebase already treats every other "applicable rate" CG
+            # bucket, e.g. `cg_buyback_loss_stcg_applicable` merging into
+            # the plain slab-rate `stcg_other` accumulator, never given a
+            # special SI entry) -- and `PTIEntry.section`'s own real-world
+            # STCG values (111A vs the business-trust/investment-fund
+            # codes 115UA/115UB/115U/115T) provide no reliable signal for a
+            # genuine flat-30% case at all; the section identifies WHICH
+            # TYPE of pass-through vehicle the income came from, not a tax
+            # rate. `compute_pti_stcg30()`/`PTI_STCG30P` therefore stay
+            # unused pending a real, verified 30%-triggering scenario --
+            # previously this whole non-111A bucket was unconditionally
+            # sent through `compute_pti_stcg30()` (a hardcoded flat 30%),
+            # silently misapplying that rate instead of the taxpayer's own
+            # slab rate to every "applicable rate" PTI STCG entry. Omitting
+            # the SI entry here is sufficient and correct: `pti_cg_gross`
+            # (below) already adds this amount to `r.capital_gains_income`
+            # /`ti`, and `special_rate_income_for_slab` (## 15, below) only
+            # excludes amounts that actually got an SI entry -- so this
+            # rupee automatically flows into `normal_income`/`slab_tax`
+            # instead, matching the identical "no SI entry -> falls through
+            # to slab rate" mechanism this same loop's OS-head branch below
+            # already documents and relies on.
             if pti.income_head == "STCG" and pti.section == "111A":
                 si_entries.append(_compute_pti_stcg20(pti.income_amount))
-            elif pti.income_head == "STCG":
-                si_entries.append(_compute_pti_stcg30(pti.income_amount))
             elif pti.income_head == "LTCG" and "112A" in pti.section.upper():
                 si_entries.append(_compute_pti_ltcg112a(pti.income_amount))
             elif pti.income_head == "LTCG":

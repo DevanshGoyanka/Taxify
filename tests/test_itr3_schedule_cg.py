@@ -61,6 +61,7 @@ from app.engine.draft_to_itr3_input import draft_to_itr3_input, _map_slump_sale
 from app.engine.calculators.itr3 import compute as compute_itr3
 from app.engine.itd.itr3 import build_itr3_json, _schedule_cg_for23_typed, _slump_sale_block
 from app.schemas.itr3 import ITR3SlumpSaleRow
+from app.schemas.return_draft import PassThroughIncomeEntry
 
 
 def _schedule_validator(name: str) -> Draft4Validator:
@@ -481,5 +482,54 @@ def test_land_building_54d_54g_54ga_reach_table_d_detail_rows() -> None:
     assert info["DeducClaimDtlsUs54D"] == [{"DateofAcquisition": "2020-01-01", "AmtDeducted": 300000}]
     assert info["DeducClaimDtlsUs54G"] == [{"DateofTransfer": "2025-12-01", "AmtDeducted": 200000}]
     assert info["DeducClaimDtlsUs54GA"] == [{"DateofTransfer": "2025-12-01", "AmtDeducted": 100000}]
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Cross-form issue #12 -- PTI capital gains: applicable-rate STCG and the
+# combined (112A + other) LTCG@12.5% bucket in the CurrYrLosses disclosure
+# ---------------------------------------------------------------------------
+
+def test_pti_stcg_applicable_rate_disclosed_under_app_rate_not_flat_30() -> None:
+    """Non-111A PTI STCG has no dedicated official SecCode for "applicable
+    rate" (only PTI_STCG20P/PTI_STCG30P exist), so the calculator taxes it
+    at slab rate, not a fabricated flat 30% -- the CurrYrLosses/
+    PassThrIncNature disclosure must match, not still show it under the
+    genuine-flat-30%-only "30Per" bucket."""
+    draft = _minimal_draft()
+    draft.passThroughIncomeEntries = [
+        PassThroughIncomeEntry(entityName="Example InvIT", entityPAN="AAAAT1234E", incomeHead="STCG", section="111A", incomeAmount=Decimal("40000")),
+        PassThroughIncomeEntry(entityName="Example InvIT", entityPAN="AAAAT1234E", incomeHead="STCG", section="OTH", incomeAmount=Decimal("60000")),
+    ]
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    cg = document["ITR"]["ITR3"]["ScheduleCGFor23"]
+    stcg = cg["ShortTermCapGainFor23"]
+    assert cg["CurrYrLosses"]["InStcg20Per"]["CurrYearIncome"] == 40000
+    assert cg["CurrYrLosses"]["InStcg30Per"]["CurrYearIncome"] == 0
+    assert cg["CurrYrLosses"]["InStcgAppRate"]["CurrYearIncome"] == 60000
+    assert stcg["PassThrIncNatureSTCG20Per"] == 40000
+    assert stcg["PassThrIncNatureSTCG30Per"] == 0
+    assert stcg["PassThrIncNatureSTCGAppRate"] == 60000
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_pti_ltcg_112a_and_other_combined_into_single_12_5_bucket() -> None:
+    """Schedule CYLA does not split section-112A LTCG from other 12.5%-rate
+    LTCG the way Schedule CG's own Table A/B do -- both must share the
+    single InLtcg12_5Per row, not have the non-112A portion misclassified
+    as DTAA-rate income under InLtcgDTAARate."""
+    draft = _minimal_draft()
+    draft.passThroughIncomeEntries = [
+        PassThroughIncomeEntry(entityName="Example REIT", entityPAN="AAAAT1234E", incomeHead="LTCG", section="112A", incomeAmount=Decimal("70000")),
+        PassThroughIncomeEntry(entityName="Example REIT", entityPAN="AAAAT1234E", incomeHead="LTCG", section="OTHER", incomeAmount=Decimal("30000")),
+    ]
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    cg = document["ITR"]["ITR3"]["ScheduleCGFor23"]
+    assert cg["CurrYrLosses"]["InLtcg12_5Per"]["CurrYearIncome"] == 100000
+    assert cg["CurrYrLosses"]["InLtcgDTAARate"]["CurrYearIncome"] == 0
     errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
     assert not errors, "\n".join(e.message for e in errors)
