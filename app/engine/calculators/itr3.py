@@ -49,7 +49,7 @@ from app.engine.schedules.capital_gains import (
     compute_exemptions, aggregate as aggregate_cg,
     post_loss_cg_baskets,
     STCGResult, LTCGResult, CG112AAsset, VDAEntry, CGAsset,
-    _is_short_term, other_asset_gain,
+    _is_short_term, other_asset_gain, _normalized_land_exemptions,
     ITR3_OTHER_ASSETS_ST_EXEMPTION_SECTIONS,
     ITR3_OTHER_ASSETS_LT_EXEMPTION_SECTIONS,
 )
@@ -367,9 +367,31 @@ def compute(input_data: ITR3Input) -> ITR3Result:
                 indexed_improvement_cost=tx.indexed_improvement,
                 year_of_improvement=tx.year_of_improvement or "",
                 expenditure_on_transfer=tx.expenditure_on_transfer,
+                # Populates `asset.exemption_total` (per-asset, section-
+                # filtered) inside compute_stcg()/compute_ltcg() -- required
+                # for `post_loss_cg_baskets()`'s own `stcg_land_54b`
+                # STCG-bucket-targeting logic to see this claim at all (it
+                # reads `asset.exemption_total`, never the scalar
+                # accumulators below), and for the second-proviso's own
+                # post-exemption EiB comparison. Falls back to the legacy
+                # `deduction_us54*` scalars when no canonical claim exists,
+                # exactly like ITR-2's own `_classify()` already does.
+                exemptions=_normalized_land_exemptions(tx),
             )
             if is_short:
                 stcg_land_cg.append(asset)
+                # Section 54B (agricultural land) is the ONLY §54-series
+                # exemption the official form allows against SHORT-term
+                # land/building gain (Schedule CG item A1d) -- this branch
+                # previously never accumulated ANY exemption at all, so a
+                # 54B claim on short-term land/building had zero tax
+                # effect on ITR-3 regardless of the per-asset fix above
+                # (that fix only affects bucket TARGETING; the exemption
+                # must also enter the aggregate `exemptions.total_exemption`
+                # pool via this scalar accumulator, exactly like the
+                # long-term branch below already does for its own four
+                # sections).
+                exempt_54b += tx.deduction_us54b
             else:
                 ltcg_land_cg.append(asset)
                 exempt_54 += tx.deduction_us54
@@ -615,7 +637,14 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     bf_list = [
         {
             "assessment_year": str(item.assessment_year),
-            "head": str(item.head),
+            # `BFLossItem.head` is a `LossHead(str, Enum)` -- `str(item.head)`
+            # renders as the class-qualified "LossHead.LONG_TERM_CAPITAL",
+            # not the plain "LTCG" value `loss_setoff/bfla.py`'s own head
+            # dispatch (`elif head == "LTCG": ...`) and `_MAX_CARRY_FWD`
+            # expiry lookup require -- so a brought-forward loss never
+            # matched anything and had ZERO effect. Mirrors ITR-2's own
+            # already-correct line exactly (calculators/itr2.py).
+            "head": item.head.value if hasattr(item.head, "value") else str(item.head),
             "sub_category": str(item.sub_category),
             "original_loss": Decimal(str(item.original_loss)),
             "brought_forward": Decimal(str(item.brought_forward)),

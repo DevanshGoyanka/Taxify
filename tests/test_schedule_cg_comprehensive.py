@@ -343,77 +343,36 @@ def test_hp_loss_absorbed_into_111a_bucket_specifically(form) -> None:
 # ===========================================================================
 # Section E -- BFLA brought-forward loss set-off
 #
-# **Two genuine, previously-undiscovered bugs surfaced while writing this
-# section** (found via direct calculator calls, not assumed -- see the two
-# dedicated bug-pinning tests at the end of this section). Both are
-# flagged to the user, neither is fixed here:
+# **Two genuine bugs were found via this section (2026-09-18), both since
+# fixed (2026-09-19) at the user's explicit request** -- see the tracker's
+# Schedule 20 fix-log for the full write-up:
 #
-# Bug 1 (ITR-3-only): `calculators/itr3.py`'s brought-forward-loss list
-# construction does `"head": str(item.head)`, but `BFLossItem.head` is a
+# Bug 1 (was ITR-3-only): `calculators/itr3.py`'s brought-forward-loss list
+# construction did `"head": str(item.head)`, but `BFLossItem.head` is a
 # `LossHead(str, Enum)` -- `str(LossHead.LONG_TERM_CAPITAL)` renders as
 # `"LossHead.LONG_TERM_CAPITAL"`, not `"LTCG"`, on this Python/pydantic
-# version. `bfla.py`'s own head dispatch (`elif head == "LTCG": ...`) never
-# matches, so a brought-forward loss has ZERO effect on ITR-3's BFLA at
-# all -- not even the GTI-level reduction, unlike Bug 2 below. ITR-2's own
-# equivalent line already handles this correctly
-# (`item.head.value if hasattr(item.head, "value") else str(item.head)`) --
-# ITR-3's was never given the same treatment.
+# version, so `bfla.py`'s own head dispatch never matched and a
+# brought-forward loss had ZERO effect on ITR-3's BFLA at all. Fixed to
+# `item.head.value if hasattr(item.head, "value") else str(item.head)`,
+# matching ITR-2's own already-correct line.
 #
-# Bug 2 (pre-existing in ITR-2, inherited unchanged by the shared
-# `post_loss_cg_baskets()` extraction -- so it now also latently affects
-# ITR-3, once Bug 1 above is fixed): the function reads
+# Bug 2 (was pre-existing in ITR-2, inherited unchanged by the shared
+# `post_loss_cg_baskets()` extraction): the function read
 # `cyla.stcg20_remaining`/`cyla.stcg30_remaining`/`cyla.stcg_app_remaining`/
 # `cyla.stcg_dtaa_remaining` (the PRE-BFLA, CYLA-level residual) for the
-# `"111a"`/`"normal_stcg"`/`"stcg_dtaa"` post-loss buckets, but
-# `bfla.ltcg125_remaining`/`bfla.ltcg_dtaa_remaining` (the POST-BFLA
-# residual) for `"112"`/`"ltcg_dtaa"`. A brought-forward STCG-head loss
-# absorbed into an STCG-rate bucket (111A/normal-rate/DTAA) is therefore
-# correctly reflected in `bfla.stcg20_remaining` etc. and in the
-# GTI-level `r.bfla_total_set_off` subtraction, but INVISIBLE to Schedule
-# SI's own special-rate tax computation for that bucket -- the disclosed
-# "loss set off" amount and the actual special-rate tax charged silently
-# diverge. Brought-forward losses absorbed into an LTCG-rate bucket are
-# unaffected (that side already reads the correct post-BFLA value).
+# `"111a"`/`"normal_stcg"`/`"stcg_dtaa"` post-loss buckets, but the
+# POST-BFLA residual for `"112"`/`"ltcg_dtaa"` -- an asymmetry present
+# since the function's introduction (`git log -S`), with no comment ever
+# justifying it. Fixed so all six sub-baskets read the post-BFLA residual
+# uniformly, since BFLA is the true final remaining income once both
+# current-year and brought-forward losses are applied.
 # ===========================================================================
 
-def test_itr3_bfla_never_applies_any_brought_forward_loss_str_enum_bug() -> None:
-    """Bug 1, pinned: an ordinary LTCG-head brought-forward loss, which
-    ITR-2 (this exact scenario) correctly absorbs, has ZERO effect for
-    ITR-3 today."""
-    bf = BFLossItem(assessment_year="2024-25", head="LTCG", sub_category="LTCG", original_loss=D("300000"), brought_forward=D("300000"))
-    txn = _txn(CGAssetType.OTHER, D("1000000"), D("400000"), explicit_long_term=True)  # 6L LTCG
-    r2 = _compute("itr2", cg_transactions=[txn], bf_losses=[bf])
-    r3 = _compute("itr3", cg_transactions=[txn], bf_losses=[bf])
-    assert r2.bfla_total_set_off == D("300000")
-    assert r3.bfla_total_set_off == D("0")  # BUG: should also be 300000
-    bfla3 = r3.schedules["bfla"]
-    assert bfla3.entries[0].head == "LossHead.LONG_TERM_CAPITAL"  # the literal str(enum) artifact
-    assert bfla3.entries[0].set_off_this_year == D("0")
-
-
 @pytest.mark.parametrize("form", _FORMS)
-def test_brought_forward_expired_loss_after_8_years_never_applies(form) -> None:
-    """Section 74's 8-year carry-forward limit -- an AY2016-17 LTCG loss
-    is expired for AY2026-27 (10 years old) and must not reduce anything.
-    (For ITR-3, this passes for the same reason Bug 1 above makes ANY
-    brought-forward loss inert -- not confirmation the expiry LOGIC itself
-    runs correctly for ITR-3; the dedicated bug-pin test above is the
-    honest signal for that.)"""
-    bf = BFLossItem(assessment_year="2016-17", head="LTCG", sub_category="LTCG", original_loss=D("500000"), brought_forward=D("500000"))
+def test_brought_forward_ltcg_loss_reduces_current_year_section_112(form) -> None:
+    bf = BFLossItem(assessment_year="2024-25", head="LTCG", sub_category="LTCG", original_loss=D("300000"), brought_forward=D("300000"))
     txn = _txn(CGAssetType.OTHER, D("1000000"), D("400000"), explicit_long_term=True)  # 6L LTCG
     r = _compute(form, cg_transactions=[txn], bf_losses=[bf])
-    assert r.bfla_total_set_off == D("0")
-    post_loss_cg = r.schedules["post_loss_cg"]
-    assert post_loss_cg["112"] == D("600000")  # fully untouched -- expired, not applied
-
-
-def test_itr2_brought_forward_ltcg_loss_reduces_current_year_section_112() -> None:
-    """The LTCG side works correctly on ITR-2 today (its own bucket
-    correctly reads the post-BFLA value) -- the baseline Bug 2's own
-    docstring above contrasts against."""
-    bf = BFLossItem(assessment_year="2024-25", head="LTCG", sub_category="LTCG", original_loss=D("300000"), brought_forward=D("300000"))
-    txn = _txn(CGAssetType.OTHER, D("1000000"), D("400000"), explicit_long_term=True)  # 6L LTCG
-    r = _compute("itr2", cg_transactions=[txn], bf_losses=[bf])
     assert r.bfla_total_set_off == D("300000")
     post_loss_cg = r.schedules["post_loss_cg"]
     assert post_loss_cg["112"] == D("300000")
@@ -422,31 +381,73 @@ def test_itr2_brought_forward_ltcg_loss_reduces_current_year_section_112() -> No
     assert si["112"].tax_amount == D("37500")
 
 
-def test_itr2_bfla_stcg_bucket_correctly_reduced_but_schedule_si_stays_stale_bug() -> None:
-    """Bug 2, pinned: `bfla.stcg20_remaining` (the BFLA schedule's own,
-    correct output) shows the 111A bucket reduced by the brought-forward
-    STCG loss, but `post_loss_cg["111a"]`/Schedule SI's own 111A row --
-    what actually drives the special-rate TAX -- still uses the STALE,
-    pre-BFLA CYLA-level figure. The disclosed loss set-off and the actual
-    tax charged silently diverge."""
+@pytest.mark.parametrize("form", _FORMS)
+def test_brought_forward_stcg_loss_reduces_111a_bucket_including_schedule_si(form) -> None:
+    """Bug 2's own regression proof: the brought-forward STCG loss must
+    now correctly reduce BOTH `bfla.stcg20_remaining` (already correct
+    before the fix) AND Schedule SI's own 111A row (the actual bug)."""
     bf = BFLossItem(assessment_year="2024-25", head="STCG", sub_category="STCG", original_loss=D("100000"), brought_forward=D("100000"))
     stcg_111a = _txn(CGAssetType.LISTED_EQUITY_111A, D("500000"), D("100000"), explicit_long_term=False)  # 4L
-    r = _compute("itr2", cg_transactions=[stcg_111a], bf_losses=[bf])
-    assert r.bfla_total_set_off == D("100000")  # BFLA itself correctly recorded the set-off
+    r = _compute(form, cg_transactions=[stcg_111a], bf_losses=[bf])
+    assert r.bfla_total_set_off == D("100000")
     bfla = r.schedules["bfla"]
-    assert bfla.stcg20_remaining == D("300000")  # BFLA's OWN output is correct: 400,000 - 100,000
+    assert bfla.stcg20_remaining == D("300000")
     si = _si(r)
-    # BUG: Schedule SI's own 111A row is still built from the pre-BFLA
-    # (CYLA-level) 400,000, not BFLA's correct 300,000 -- si["111A"] is
-    # OVERTAXED by the un-applied brought-forward loss.
-    assert si["111A"].taxable_income == D("400000")
+    assert si["111A"].taxable_income == D("300000")
+    assert si["111A"].tax_amount == D("60000")  # 20% of 300,000, not the pre-fix 400,000
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_brought_forward_stcg_loss_absorbs_stcg_before_ltcg(form) -> None:
+    """A brought-forward STCG-head loss absorbs STCG buckets FIRST, then
+    LTCG only if STCG is insufficient (bfla.py's own `_STCG_ORDER`-then-
+    `_LTCG_ORDER` cascade for a "STCG"-head source)."""
+    bf = BFLossItem(assessment_year="2024-25", head="STCG", sub_category="STCG", original_loss=D("100000"), brought_forward=D("100000"))
+    stcg_111a = _txn(CGAssetType.LISTED_EQUITY_111A, D("500000"), D("100000"), explicit_long_term=False)  # 4L
+    ltcg_other = _txn(CGAssetType.OTHER, D("1000000"), D("400000"), explicit_long_term=True)  # 6L
+    r = _compute(form, cg_transactions=[stcg_111a, ltcg_other], bf_losses=[bf])
+    si = _si(r)
+    assert si["111A"].taxable_income == D("300000")  # 400000 - 100000
+    assert si["112"].taxable_income == D("600000")  # untouched -- STCG fully absorbed the loss
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_brought_forward_expired_loss_after_8_years_never_applies(form) -> None:
+    """Section 74's 8-year carry-forward limit -- an AY2016-17 LTCG loss
+    is expired for AY2026-27 (10 years old) and must not reduce anything."""
+    bf = BFLossItem(assessment_year="2016-17", head="LTCG", sub_category="LTCG", original_loss=D("500000"), brought_forward=D("500000"))
+    txn = _txn(CGAssetType.OTHER, D("1000000"), D("400000"), explicit_long_term=True)  # 6L LTCG
+    r = _compute(form, cg_transactions=[txn], bf_losses=[bf])
+    assert r.bfla_total_set_off == D("0")
+    post_loss_cg = r.schedules["post_loss_cg"]
+    assert post_loss_cg["112"] == D("600000")  # fully untouched -- expired, not applied
+    bfla = r.schedules["bfla"]
+    expired = [e for e in bfla.entries if e.sub_category == "EXPIRED"]
+    assert len(expired) == 1
+    assert expired[0].remaining_carry_forward == D("0")
 
 
 # ===========================================================================
 # Section F -- exemptions (54/54B/54EC/54F) ordering and capping
+#
+# **A third genuine bug was found here (2026-09-18), since fixed
+# (2026-09-19)**: ITR-3's transaction loop only accumulated the
+# `exempt_54*` legacy scalars in the LONG-term land/building branch --
+# the SHORT-term branch never read `tx.deduction_us54b` at all, AND
+# separately never populated the per-asset `CGAsset.exemptions` list
+# `post_loss_cg_baskets()`'s own STCG-bucket-targeting logic
+# (`stcg_land_54b = sum(asset.exemption_total ...)`) depends on -- so a
+# 54B claim on short-term land/building had ZERO tax effect on ITR-3,
+# via either mechanism. Fixed by (1) accumulating `exempt_54b` in the
+# short-term branch too (Schedule CG item A1d allows ONLY 54B for STCG,
+# unlike the long-term branch's four sections) and (2) populating
+# `CGAsset.exemptions` via the shared `_normalized_land_exemptions()`
+# helper (already used by ITR-2's own `_classify()`) for both ST and LT
+# land/building rows alike.
 # ===========================================================================
 
-def test_itr2_54b_on_stcg_land_reduces_stcg_not_ltcg() -> None:
+@pytest.mark.parametrize("form", _FORMS)
+def test_54b_on_stcg_land_reduces_stcg_not_ltcg(form) -> None:
     """Section 54B is the ONLY exemption STCG land/building may claim, and
     it must reduce THAT bucket first, not simply flow to LTCG."""
     stcg_land = _txn(
@@ -455,37 +456,10 @@ def test_itr2_54b_on_stcg_land_reduces_stcg_not_ltcg() -> None:
         deduction_us54b=D("400000"),
     )  # 10L gain, 4L exemption -> 6L taxable, slab rate
     ltcg_other = _txn(CGAssetType.OTHER, D("1000000"), D("400000"), explicit_long_term=True)  # 6L LTCG, no exemption
-    r = _compute("itr2", cg_transactions=[stcg_land, ltcg_other])
+    r = _compute(form, cg_transactions=[stcg_land, ltcg_other])
     post_loss_cg = r.schedules["post_loss_cg"]
     assert post_loss_cg["normal_stcg"] == D("600000")  # 1,000,000 - 400,000
     assert post_loss_cg["112"] == D("600000")  # untouched by the 54B claim
-
-
-def test_itr3_54b_on_stcg_land_never_applied_at_all_bug() -> None:
-    """Bug 3, pinned, ITR-3-only: the IDENTICAL scenario as the ITR-2 test
-    above produces a DIFFERENT result on ITR-3 -- the section 54B claim on
-    a short-term land/building sale has ZERO tax effect. Root cause,
-    confirmed by direct code reading, is two-fold: (1) `calculators/
-    itr3.py`'s transaction loop only accumulates `exempt_54*` legacy
-    scalars in the LONG-term land/building branch (`else:` after
-    `if is_short:`) -- the short-term branch (`stcg_land_cg.append(asset)`)
-    never reads `tx.deduction_us54b` at all; (2) separately, the `CGAsset`
-    this loop constructs never populates `.exemptions` either (a narrower,
-    already-flagged disclosure-precision gap, tracked in
-    `Docs/ITR3_SCHEDULE_IMPLEMENTATION_TRACKER.md`'s cross-form-issues
-    section), so even the OTHER exemption-total mechanism
-    (`stcg_land_54b = sum(asset.exemption_total ...)` in
-    `post_loss_cg_baskets()`) is also a dead end for ITR-3. A resident
-    taxpayer claiming 54B against short-term agricultural-land gain on
-    ITR-3 today gets NO tax benefit from that claim whatsoever."""
-    stcg_land = _txn(
-        CGAssetType.LAND_BUILDING, D("2000000"), D("1000000"),
-        date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2025, 12, 1),
-        deduction_us54b=D("400000"),
-    )
-    r = _compute("itr3", cg_transactions=[stcg_land])
-    post_loss_cg = r.schedules["post_loss_cg"]
-    assert post_loss_cg["normal_stcg"] == D("1000000")  # BUG: should be 600,000 (1,000,000 - 400,000)
 
 
 @pytest.mark.parametrize("form", _FORMS)
@@ -528,17 +502,16 @@ def test_exemption_exceeding_gain_caps_at_gain_never_negative(form) -> None:
     assert r.special_rate_tax == D("0")
 
 
-def test_itr2_leftover_54_exemption_after_stcg_reduces_ltcg() -> None:
+@pytest.mark.parametrize("form", _FORMS)
+def test_leftover_54_exemption_after_stcg_reduces_ltcg(form) -> None:
     """Any 54B exemption pool NOT fully consumed by STCG land carries over
-    to reduce LTCG (the remaining-pool consumption chain). (ITR-2 only --
-    see `test_itr3_54b_on_stcg_land_never_applied_at_all_bug` above for
-    why ITR-3 cannot demonstrate this today.)"""
+    to reduce LTCG (the remaining-pool consumption chain)."""
     stcg_land = _txn(
         CGAssetType.LAND_BUILDING, D("500000"), D("400000"),
         date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2025, 12, 1),
         deduction_us54b=D("300000"),
     )  # 1L gain, but 3L claimed -- only 1L actually usable here
-    r = _compute("itr2", cg_transactions=[stcg_land])
+    r = _compute(form, cg_transactions=[stcg_land])
     post_loss_cg = r.schedules["post_loss_cg"]
     assert post_loss_cg["normal_stcg"] == D("0")  # fully absorbed, capped at gain
 

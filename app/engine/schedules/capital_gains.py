@@ -687,8 +687,22 @@ def post_loss_cg_baskets(
     # two is ever nonzero for a single return, so summing both is safe and
     # keeps this basket's own total unchanged regardless of which CYLA
     # sub-bucket it came from.
-    normal_stcg = cyla.stcg30_remaining + cyla.stcg_app_remaining
-    section_111a = cyla.stcg20_remaining  # 20% 111A STCG
+    #
+    # All six sub-baskets read the POST-BFLA (not CYLA-level) residual --
+    # BFLA runs after CYLA and is the true final remaining income once
+    # BOTH current-year (CYLA) and brought-forward (BFLA) losses are
+    # applied. The STCG-side buckets previously read `cyla.*_remaining`
+    # (pre-BFLA) while the LTCG-side buckets already correctly read
+    # `bfla.*_remaining` -- a pre-existing asymmetry (present since this
+    # function's introduction, confirmed via `git log -S`, with no comment
+    # ever justifying it) that made a brought-forward loss absorbed into
+    # an STCG-rate bucket correctly reduce GTI (via the separate
+    # `bfla_total_set_off` subtraction) but silently NEVER reduce that
+    # bucket's own Schedule SI special-rate tax -- the disclosed loss
+    # set-off and the actual tax charged diverged. Found via
+    # `tests/test_schedule_cg_comprehensive.py` (2026-09-18).
+    normal_stcg = bfla.stcg30_remaining + bfla.stcg_app_remaining
+    section_111a = bfla.stcg20_remaining  # 20% 111A STCG
     # 112A gross and 112 other LTCG are both in the ltcg125 pool;
     # split 112A out for threshold application.
     other_ltcg = bfla.ltcg125_remaining  # post-BFLA LTCG (includes 112A)
@@ -737,10 +751,9 @@ def post_loss_cg_baskets(
         "112a_gross": section_112a,
         "112a_taxable": max(_ZERO, section_112a - LTCG_112A_EXEMPTION),
         # DTAA-rate STCG/LTCG -- each its own independent CYLA/BFLA
-        # sub-basket, post-loss/post-brought-forward remaining amount
-        # (mirroring "111a"'s CYLA-level and "112"'s BFLA-level precedent
-        # respectively).
-        "stcg_dtaa": cyla.stcg_dtaa_remaining,
+        # sub-basket, post-brought-forward remaining amount (matching
+        # "111a"'s and "112"'s own post-BFLA sourcing above).
+        "stcg_dtaa": bfla.stcg_dtaa_remaining,
         "ltcg_dtaa": bfla.ltcg_dtaa_remaining,
         # Total §54-series exemption actually consumed against STCG+LTCG
         # this year (NOT including the separate section 112A ₹1.25L
