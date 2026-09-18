@@ -35,6 +35,7 @@ from app.schemas.itr2 import (
     CGTransaction,
     CGAssetType,
     ITR2Input,
+    PTIEntry,
     ResidentialStatus,
     ScheduleSIEntry,
 )
@@ -142,6 +143,67 @@ def test_other_assets_ltcg_taxed_at_section_112(form) -> None:
     si = _si(r)
     assert si["112"].taxable_income == D("200000")
     assert si["112"].tax_amount == D("25000")
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_section_50ca_deemed_consideration_applied_to_actual_tax(form) -> None:
+    """Cross-form issue #8: section 50CA ("higher of consideration or
+    FMV" for unquoted shares) was correctly disclosed but never applied
+    to the actual taxed gain -- consideration 100000, cost 50000, FMV
+    2000000 must produce a taxable gain of 1950000 (FMV - cost), not
+    50000 (consideration - cost)."""
+    txn = _txn(
+        CGAssetType.UNLISTED_SHARES, D("100000"), D("50000"),
+        explicit_long_term=True, fair_market_value_50ca=D("2000000"),
+    )
+    r = _compute(form, cg_transactions=[txn])
+    si = _si(r)
+    assert si["112"].taxable_income == D("1950000")
+    assert si["112"].tax_amount == D("243750")  # 1950000 * 12.5%
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_section_50ca_aggregates_across_transactions_not_per_transaction(form) -> None:
+    """Section 50CA applies "higher of consideration or FMV" to ALL
+    unquoted-share disposals TOGETHER as one aggregate row on the
+    official form, matching the disclosure builder's own aggregation
+    (itd/cg_shared.py). Applying it per-transaction would overstate the
+    deemed consideration here: txn A (consideration 300000, FMV 100000)
+    and txn B (consideration 100000, FMV 300000) each individually
+    "deem" no change (max already equals the higher side for A, and B's
+    FMV exceeds its own consideration) -- summed correctly in aggregate,
+    total consideration (400000) equals total FMV (400000), so there
+    should be NO 50CA adjustment at all. A wrong per-transaction
+    implementation would instead deem A's max(300000,100000)=300000 +
+    B's max(100000,300000)=300000 = 600000, a 200000 overstatement."""
+    txn_a = _txn(
+        CGAssetType.UNLISTED_SHARES, D("300000"), D("100000"),
+        explicit_long_term=True, fair_market_value_50ca=D("100000"),
+    )
+    txn_b = _txn(
+        CGAssetType.UNLISTED_SHARES, D("100000"), D("50000"),
+        explicit_long_term=True, fair_market_value_50ca=D("300000"),
+    )
+    r = _compute(form, cg_transactions=[txn_a, txn_b])
+    si = _si(r)
+    # gain = (300000 - 100000) + (100000 - 50000) = 250000, no 50CA delta
+    assert si["112"].taxable_income == D("250000")
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_section_94_7_94_8_disallowed_loss_added_back_to_other_assets_stcg(form) -> None:
+    """Cross-form issue #9: the section 94(7)/94(8) disallowed-loss
+    add-back (Schedule CG's Sl. A5d ITR-2 / A6d ITR-3, "loss to be
+    disallowed") was present on ITR-3's own other_asset_gain() but
+    missing from ITR-2's equivalent -- jewellery STCG with consideration
+    500000, cost 300000, a 50000 disallowed loss must produce a taxable
+    gain of 250000 (200000 + 50000 addback), not 200000."""
+    txn = _txn(
+        CGAssetType.JEWELLERY, D("500000"), D("300000"),
+        explicit_long_term=False, loss_disallowed_94_7_94_8=D("50000"),
+    )
+    r = _compute(form, cg_transactions=[txn])
+    assert r.capital_gains_income == D("250000")
 
 
 @pytest.mark.parametrize("form", _FORMS)
@@ -741,25 +803,32 @@ def test_non_fii_stcg_never_lands_in_flat_30_percent_bucket() -> None:
 
 
 # ===========================================================================
-# Section K -- ITR-3-only: slump sale / unutilized CGAS deposits
-# (documented as DISCLOSURE-ONLY today -- confirmed by direct grep that
-# neither `cg_slump_sale_*` nor `cg_*_unutilized_*` is read anywhere in
-# `app/engine/calculators/itr3.py`. This is a real, found-but-not-fixed
-# gap, flagged to the user rather than silently treated as working; these
-# tests exist to PIN today's actual behavior, not to certify it correct.)
+# Section K -- ITR-3-only: slump sale / unutilized CGAS deposits / PTI
+# capital gains (cross-form issue #11, tracker). All three were correctly
+# disclosed but never merged into the actual taxed STCG/LTCG total until
+# this fix -- these tests certify the now-correct behavior.
 # ===========================================================================
 
-def test_slump_sale_currently_has_zero_tax_effect_disclosure_only() -> None:
+def test_slump_sale_reaches_actual_tax_at_section_112() -> None:
+    """Cross-form issue #11 (tracker): slump sale (A2/B2, section 50B) was
+    correctly disclosed but never merged into the actual taxed LTCG total
+    -- taxed at ordinary section-112 rates like the generic "other assets"
+    bucket, exactly matching this test's own former "zero tax effect"
+    name, now reversed since the fix."""
     from app.schemas.itr3 import ITR3SlumpSaleRow
 
     row = ITR3SlumpSaleRow(fmv_11uae_2=D("8000000"), fmv_11uae_3=D("8200000"), net_worth=D("3000000"))
     r = _compute("itr3", cg_slump_sale_ltcg=[row])
-    assert r.capital_gains_income == D("0")
-    assert r.special_rate_tax == D("0")
-    assert r.slab_tax == D("0")
+    si = _si(r)
+    # gain = max(8000000, 8200000) - 3000000 = 5200000
+    assert r.capital_gains_income == D("5200000")
+    assert si["112"].tax_amount == D("650000")  # 5200000 * 12.5%
 
 
-def test_unutilized_cgas_deposit_currently_has_zero_tax_effect_disclosure_only() -> None:
+def test_unutilized_cgas_deposit_reaches_actual_tax_as_deemed_ltcg() -> None:
+    """Cross-form issue #11 (tracker): the unutilized-CGAS deemed capital
+    gain (A7/B10) was correctly disclosed but never merged into the
+    actual taxed LTCG total."""
     from app.schemas.itr3 import ITR3UnutilizedCGRow
 
     row = ITR3UnutilizedCGRow(
@@ -767,8 +836,89 @@ def test_unutilized_cgas_deposit_currently_has_zero_tax_effect_disclosure_only()
         year_asset_acquired="2025-26", amount_utilized=D("0"), amount_unutilized=D("500000"),
     )
     r = _compute("itr3", cg_ltcg_unutilized_flag="Y", cg_ltcg_unutilized_deposits=[row])
-    assert r.capital_gains_income == D("0")
+    si = _si(r)
+    assert r.capital_gains_income == D("500000")
+    assert si["112"].tax_amount == D("62500")  # 500000 * 12.5%
+
+
+def test_slump_sale_stcg_and_unutilized_stcg_deposit_reach_actual_tax() -> None:
+    """The STCG side of both items (item 2c STCG slump sale; item A7
+    unutilized-CGAS-STCG deposit) is taxed at slab rate, not section 112
+    -- matching the generic other-assets STCG bucket."""
+    from app.schemas.itr3 import ITR3SlumpSaleRow, ITR3UnutilizedCGRow
+
+    slump = ITR3SlumpSaleRow(fmv_11uae_2=D("2000000"), fmv_11uae_3=D("1800000"), net_worth=D("500000"))
+    deposit = ITR3UnutilizedCGRow(prev_year_transferred="2023-24", section_claimed="54B", amount_unutilized=D("100000"))
+    r = _compute("itr3", cg_slump_sale_stcg=[slump], cg_stcg_unutilized_deposits=[deposit])
+    # slump gain = max(2000000,1800000) - 500000 = 1500000; + deposit 100000 = 1600000
+    assert r.capital_gains_income == D("1600000")
     assert r.special_rate_tax == D("0")
+    assert r.slab_tax > D("0")
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_pti_ltcg_112a_and_ltcg_125_route_to_correct_si_codes(form) -> None:
+    """PTI capital gains (Schedule PTI) retain the SAME head and rate the
+    pass-through entity itself earned them under, dispatched to their own
+    dedicated Schedule-SI SecCodes -- NOT merged into the ordinary
+    111A/112/112A rows (cross-form issue #11, tracker; ITR-3 previously
+    never read pti_entries anywhere in its calculator at all)."""
+    entry_112a = PTIEntry(entity_name="AIF-1", entity_pan="ABCDE1234F", income_head="LTCG", section="112A", income_amount=D("300000"))
+    entry_other = PTIEntry(entity_name="AIF-2", entity_pan="FGHIJ5678K", income_head="LTCG", section="112", income_amount=D("200000"))
+    r = _compute(form, pti_entries=[entry_112a, entry_other])
+    si = _si(r)
+    assert si["PTI_LTCG12_5P112A"].tax_amount == D("37500")  # 300000 * 12.5%
+    assert si["PTI_LTCG12_5P"].tax_amount == D("25000")  # 200000 * 12.5%
+    assert r.capital_gains_income == D("500000")
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_pti_capital_gains_not_run_through_cyla(form) -> None:
+    """PTI capital gains are a pure pass-through total, deliberately not
+    eligible for CYLA/BFLA loss set-off -- an unrelated large LTCG loss
+    elsewhere in the return must not reduce PTI's own taxed amount."""
+    loss_txn = _txn(CGAssetType.OTHER, D("100000"), D("2000000"), explicit_long_term=True)  # LTCG loss
+    pti = PTIEntry(entity_name="AIF", entity_pan="ABCDE1234F", income_head="STCG", section="30", income_amount=D("150000"))
+    r = _compute(form, cg_transactions=[loss_txn], pti_entries=[pti])
+    si = _si(r)
+    assert si["PTI_STCG30P"].tax_amount == D("45000")  # 150000 * 30%, untouched by the LTCG loss
+
+
+# ===========================================================================
+# Section L2 -- ITR-3-only: land/building 54D/54G/54GA (cross-form issue
+# #10, tracker) -- STCG item A1d allows 54B/54G/54GA; LTCG item B1d
+# additionally allows 54D. Neither had a schema field until this fix.
+# ===========================================================================
+
+def test_54d_reduces_ltcg_land_building_actual_tax() -> None:
+    txn = CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING, full_consideration=D("2000000"), cost_of_acquisition=D("500000"),
+        date_of_acquisition=date(2020, 1, 1), date_of_transfer=date(2026, 1, 1), deduction_us54d=D("300000"),
+    )
+    r = _compute("itr3", cg_transactions=[txn])
+    assert r.capital_gains_income == D("1200000")  # 1500000 - 300000
+
+
+@pytest.mark.parametrize("section", ["deduction_us54g", "deduction_us54ga"])
+def test_54g_54ga_reduce_stcg_land_building_actual_tax(section) -> None:
+    txn = CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING, full_consideration=D("2000000"), cost_of_acquisition=D("500000"),
+        date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2025, 12, 1), **{section: D("300000")},
+    )
+    r = _compute("itr3", cg_transactions=[txn])
+    assert r.capital_gains_income == D("1200000")  # 1500000 - 300000
+
+
+def test_itr2_land_building_unaffected_by_new_54d_54g_54ga_fields() -> None:
+    """The shared CGTransaction/compute_ltcg widening for ITR-3's own
+    wider section set must not change ITR-2's own already-correct
+    behavior -- section 54 alone still applies exactly as before."""
+    txn = CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING, full_consideration=D("2000000"), cost_of_acquisition=D("500000"),
+        date_of_acquisition=date(2020, 1, 1), date_of_transfer=date(2026, 1, 1), deduction_us54=D("300000"),
+    )
+    r = _compute("itr2", cg_transactions=[txn])
+    assert r.capital_gains_income == D("1200000")
 
 
 # ===========================================================================

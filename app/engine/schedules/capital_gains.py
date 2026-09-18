@@ -28,7 +28,15 @@ def _decimal(value: Optional[Decimal]) -> Decimal:
     return value if value is not None else _ZERO
 
 
-_LAND_BUILDING_EXEMPTION_SECTIONS = frozenset({"54", "54B", "54EC", "54F"})
+# Widest valid set across both forms' own LTCG land/building item text --
+# ITR-2's own item allows only 54/54B/54EC/54F; ITR-3's item B1d
+# additionally allows 54D/54G/54GA (cross-form issue #10, tracker).
+# compute_stcg()/compute_ltcg() are called only by ITR-2/ITR-3 (confirmed:
+# ITR-1/4 have no capital-gains schedule at all), so widening this shared
+# constant is safe for ITR-1/4 (unreachable) and harmless for ITR-2
+# (nothing populates deduction_us54d/g/ga there) while fixing the real
+# ITR-3 gap.
+_LAND_BUILDING_EXEMPTION_SECTIONS = frozenset({"54", "54B", "54EC", "54F", "54D", "54G", "54GA"})
 
 
 def _exemption_claim_total(claims: list, sections: frozenset) -> Decimal:
@@ -387,10 +395,13 @@ def compute_stcg(
         asset.total_deductions = total_ded
         asset.balance = deemed - total_ded
         asset.taxable_gain = asset.balance
-        # STCG land/building can only claim section 54B (agricultural
-        # land) per the official form's own item 1d -- 54/54EC/54F are
-        # LTCG-only exemptions.
-        asset.exemption_total = _exemption_claim_total(asset.exemptions, frozenset({"54B"}))
+        # STCG land/building's valid exemption-section set differs by
+        # form: ITR-2's own item 1d allows only 54B (agricultural land);
+        # ITR-3's item A1d additionally allows 54G/54GA (cross-form issue
+        # #10, tracker). 54/54EC/54D/54F are LTCG-only exemptions on both
+        # forms. Widened here (not split per-form) since ITR-2 never
+        # populates deduction_us54g/ga -- harmless for ITR-2, fixes ITR-3.
+        asset.exemption_total = _exemption_claim_total(asset.exemptions, frozenset({"54B", "54G", "54GA"}))
         land_gain += asset.balance
     other = land_gain + _decimal(stcg_other)
     section_111a = _decimal(stcg_111a)
@@ -1013,6 +1024,48 @@ def _asset_type_value(tx: object) -> str:
     return str(at)
 
 
+def unquoted_shares_50ca_adjustment(transactions, is_short: bool) -> Decimal:
+    """Aggregate section 50CA deemed-consideration adjustment for the
+    generic "other assets" bucket's unlisted-shares subset (Sl. A5(a)(i)/
+    B8(a)(i) ITR-2; A6(a)(i)/B9(a)(i) ITR-3).
+
+    Section 50CA applies "higher of consideration or FMV" to ALL unquoted-
+    share disposals TOGETHER as one aggregate row on the official form --
+    not per transaction. Applying ``deemed_consideration_50ca()`` to each
+    transaction individually would silently OVERSTATE the deemed
+    consideration whenever multiple unquoted-share sales exist with some
+    above and some below their own FMV (max(a,b) + max(c,d) >= max(a+c,
+    b+d) in general), and would also disagree with the disclosure builder
+    (``itd/cg_shared.py``'s own ``unq_deemed = deemed_consideration_50ca(
+    unq_consideration, unq_fmv)``), which already aggregates correctly.
+
+    Returns the DELTA (deemed - actual consideration) to be added once to
+    the bucket's own signed gain total -- neither ``other_asset_gain()``
+    nor ITR-2's ``_classify()`` substitute a per-transaction deemed value,
+    both still compute the "actual consideration" gain in their own loop;
+    this adjustment is added on top, matching how the disclosure side
+    itself only ever adjusts the aggregate.
+    """
+    consideration = _ZERO
+    fmv = _ZERO
+    for tx in transactions or []:
+        if _asset_type_value(tx) != "unlisted_shares":
+            continue
+        acquired = _date_attr(tx, "date_of_acquisition")
+        transferred = _date_attr(tx, "date_of_transfer")
+        explicit_long = _bool_attr(tx, "explicit_long_term")
+        tx_is_short = True
+        if acquired is not None and transferred is not None:
+            tx_is_short = _is_short_term("unlisted_shares", acquired, transferred)
+        elif explicit_long is not None:
+            tx_is_short = not explicit_long
+        if tx_is_short != is_short:
+            continue
+        consideration += _decimal_attr(tx, "full_consideration")
+        fmv += _decimal_attr(tx, "fair_market_value_50ca")
+    return deemed_consideration_50ca(consideration, fmv) - consideration
+
+
 def _claim_total(transactions, section: str) -> Decimal:
     """Sum canonical §54-series / 115F exemption claims for one section.
 
@@ -1068,6 +1121,9 @@ _LEGACY_EXEMPTION_FIELDS = {
     "54B": "deduction_us54b",
     "54EC": "deduction_us54ec",
     "54F": "deduction_us54f",
+    "54D": "deduction_us54d",
+    "54G": "deduction_us54g",
+    "54GA": "deduction_us54ga",
 }
 
 
@@ -1180,10 +1236,26 @@ def _classify(transactions) -> tuple:
                 ltcg_land.append(asset)
         else:
             gain = full_consideration - cost - expenditure
+            # Item 9 (cross-form issues log): the 94(7)/94(8) disallowed-
+            # loss add-back (Sl. A5d ITR-2) was present on ITR-3's own
+            # equivalent formula (other_asset_gain()) but missing here --
+            # entered as a positive value that must be ADDED to reverse a
+            # loss the taxpayer already booked but the Act disallows.
             if is_short:
+                gain += _decimal_attr(tx, "loss_disallowed_94_7_94_8")
                 stcg_other_signed += gain
             else:
                 ltcg_other_signed += gain
+
+    # Item 8 (cross-form issues log): section 50CA's "higher of
+    # consideration or FMV" deemed value for unquoted-share disposals was
+    # correctly disclosed (itd/cg_shared.py) but never applied to the
+    # actual taxed gain. Added once, in aggregate, matching the disclosure
+    # builder's own aggregation exactly -- see unquoted_shares_50ca_
+    # adjustment()'s own docstring for why per-transaction application
+    # would overstate the deemed consideration.
+    stcg_other_signed += unquoted_shares_50ca_adjustment(transactions, is_short=True)
+    ltcg_other_signed += unquoted_shares_50ca_adjustment(transactions, is_short=False)
 
     return (
         ltcg_112a_assets, stcg_land, ltcg_land,

@@ -434,6 +434,15 @@ class CGTransaction(StrictModel):
     deduction_us54b: Decimal = Field(default=Decimal("0"), ge=0)
     deduction_us54ec: Decimal = Field(default=Decimal("0"), ge=0)
     deduction_us54f: Decimal = Field(default=Decimal("0"), ge=0)
+    # ITR-3's own land/building exemption items allow a WIDER section set
+    # than ITR-2's equivalent: STCG item A1d = "54B/54G/54GA"; LTCG item
+    # B1d = "54/54B/54D/54EC/54F/54G/54GA" (confirmed against the official
+    # ITR-3 form text directly). ITR-2's own land/building items only ever
+    # allow 54/54B/54EC/54F, so it never populates these three -- safe,
+    # additive fields on this shared model.
+    deduction_us54d: Decimal = Field(default=Decimal("0"), ge=0)
+    deduction_us54g: Decimal = Field(default=Decimal("0"), ge=0)
+    deduction_us54ga: Decimal = Field(default=Decimal("0"), ge=0)
     # Schedule CG's generic "other assets" bucket (Sl. A6f/B9d in ITR-3;
     # Sl. B8d in ITR-2 -- ITR-2's own STCG-other-assets item, A5, has NO
     # exemption line at all) -- a single flat (section, amount) exemption
@@ -461,13 +470,16 @@ class CGTransaction(StrictModel):
                 raise ValueError("quantity × sale_price_per_unit must reconcile to consideration")
         canonical = {
             section: sum((claim.investment_amount + claim.cgas_deposit_amount for claim in self.exemptions if claim.section == section), Decimal("0"))
-            for section in ("54", "54B", "54EC", "54F")
+            for section in ("54", "54B", "54EC", "54F", "54D", "54G", "54GA")
         }
         legacy = {
             "54": self.deduction_us54,
             "54B": self.deduction_us54b,
             "54EC": self.deduction_us54ec,
             "54F": self.deduction_us54f,
+            "54D": self.deduction_us54d,
+            "54G": self.deduction_us54g,
+            "54GA": self.deduction_us54ga,
         }
         for section, amount in legacy.items():
             if canonical[section] > 0 and amount not in (Decimal("0"), canonical[section]):

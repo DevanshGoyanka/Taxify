@@ -50,6 +50,7 @@ from app.engine.schedules.capital_gains import (
     post_loss_cg_baskets,
     STCGResult, LTCGResult, CG112AAsset, VDAEntry, CGAsset,
     _is_short_term, other_asset_gain, _normalized_land_exemptions,
+    unquoted_shares_50ca_adjustment,
     ITR3_OTHER_ASSETS_ST_EXEMPTION_SECTIONS,
     ITR3_OTHER_ASSETS_LT_EXEMPTION_SECTIONS,
 )
@@ -314,6 +315,13 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     exempt_54b = z
     exempt_54ec = z
     exempt_54f = z
+    # Cross-form issue #10 (tracker): ITR-3's own land/building exemption
+    # items allow a WIDER section set than ITR-2's equivalent (STCG item
+    # A1d = 54B/54G/54GA; LTCG item B1d additionally allows 54D) -- these
+    # three have no legacy field/accumulation slot at all until now.
+    exempt_54d = z
+    exempt_54g = z
+    exempt_54ga = z
 
     for tx in (input_data.cg_transactions or []):
         asset_type = tx.asset_type.value
@@ -392,12 +400,20 @@ def compute(input_data: ITR3Input) -> ITR3Result:
                 # long-term branch below already does for its own four
                 # sections).
                 exempt_54b += tx.deduction_us54b
+                # Item A1d also allows 54G/54GA (shifting an industrial
+                # undertaking) against short-term land/building gain --
+                # NOT 54D, which is long-term-only per item B1d.
+                exempt_54g += tx.deduction_us54g
+                exempt_54ga += tx.deduction_us54ga
             else:
                 ltcg_land_cg.append(asset)
                 exempt_54 += tx.deduction_us54
                 exempt_54b += tx.deduction_us54b
                 exempt_54ec += tx.deduction_us54ec
                 exempt_54f += tx.deduction_us54f
+                exempt_54d += tx.deduction_us54d
+                exempt_54g += tx.deduction_us54g
+                exempt_54ga += tx.deduction_us54ga
 
         elif asset_type == "listed_equity_112a":
             # 112A is always long-term (listed equity held >12 months)
@@ -428,6 +444,18 @@ def compute(input_data: ITR3Input) -> ITR3Result:
             else:
                 ltcg_other_cg += gain
 
+    # Cross-form issue #8 (Docs/ITR3_SCHEDULE_IMPLEMENTATION_TRACKER.md):
+    # section 50CA's "higher of consideration or FMV" deemed value for
+    # unquoted-share disposals was correctly disclosed (itd/cg_shared.py)
+    # but never applied to the actual taxed gain -- other_asset_gain()
+    # above uses tx.full_consideration directly. Added once, in aggregate,
+    # matching the disclosure builder's own aggregation exactly (see
+    # unquoted_shares_50ca_adjustment()'s own docstring for why a
+    # per-transaction application would overstate the deemed
+    # consideration whenever multiple unquoted-share sales exist).
+    stcg_other += unquoted_shares_50ca_adjustment(input_data.cg_transactions, is_short=True)
+    ltcg_other_cg += unquoted_shares_50ca_adjustment(input_data.cg_transactions, is_short=False)
+
     # Schedule CG item A6e -- "Deemed short-term capital gains on
     # depreciable assets (6 of schedule - DCG)". This is a SCHEDULE-level
     # total (Schedule DCG's own grand total across the block-of-assets
@@ -457,6 +485,28 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     stcg_111a_val += input_data.cg_buyback_loss_stcg20
     stcg_other += input_data.cg_buyback_loss_stcg30 + input_data.cg_buyback_loss_stcg_applicable
     ltcg_other_cg += input_data.cg_buyback_loss_ltcg
+
+    # Cross-form issue #11 (tracker): slump sale (A2/B2, section 50B) and
+    # unutilized-CGAS deemed capital gains (A7/B10) were correctly
+    # disclosed (itd/itr3.py::_slump_sale_block()/_unutilized_cg_block())
+    # but never merged into the actual taxed STCG/LTCG total -- both are
+    # taxed at ORDINARY rates (slab for short-term, section 112 for
+    # long-term), exactly like the generic "other assets" bucket, so they
+    # are merged into the same stcg_other/ltcg_other_cg accumulator
+    # already used for that bucket -- correctly eligible for the same
+    # intra-CG CYLA/BFLA loss set-off the Act allows, unlike PTI pass-
+    # through income below. Formulas match the disclosure builder's own
+    # exactly (item 2c/2e, item x "AmtDeemed").
+    for row in (input_data.cg_slump_sale_stcg or []):
+        stcg_other += max(row.fmv_11uae_2, row.fmv_11uae_3) - row.net_worth
+    for row in (input_data.cg_slump_sale_ltcg or []):
+        ltcg_other_cg += max(row.fmv_11uae_2, row.fmv_11uae_3) - row.net_worth - row.exemption_amount
+    stcg_other += sum(
+        (row.amount_unutilized for row in (input_data.cg_stcg_unutilized_deposits or [])), z,
+    )
+    ltcg_other_cg += sum(
+        (row.amount_unutilized for row in (input_data.cg_ltcg_unutilized_deposits or [])), z,
+    )
 
     for scrip in (input_data.cg_112a_scrips or []):
         ltcg_112a_assets.append(CG112AAsset(
@@ -531,8 +581,33 @@ def compute(input_data: ITR3Input) -> ITR3Result:
 
     vda_income = compute_vda(vda_entries=vda_entries_list)
     exemptions = compute_exemptions(exempt_54, exempt_54b, exempt_54ec, exempt_54f)
+    # Cross-form issue #10 (tracker): 54D/54G/54GA have no dedicated
+    # ExemptionResult field (compute_exemptions() is shared with ITR-1/2/4
+    # and deliberately left untouched here) -- folded directly into the
+    # aggregate total instead, which is all aggregate()/post_loss_cg_
+    # baskets() actually consume for the LTCG-side exemption pool; the
+    # STCG-side 54G/54GA netting already happens automatically via
+    # asset.exemption_total (Table E's own per-asset mechanism), since
+    # _normalized_land_exemptions() now recognizes these three sections.
+    exemptions.total_exemption += exempt_54d + exempt_54g + exempt_54ga
     cg_result = aggregate_cg(stcg_result, ltcg_result, vda_income, exemptions)
-    r.capital_gains_income = cg_result.total_capital_gains
+
+    # Cross-form issue #11 (tracker): Schedule PTI capital gains
+    # (income_head "STCG"/"LTCG") retain the SAME head AND rate the
+    # business trust/investment fund itself earned them under (section
+    # 115UA(2)/115UB(1) proviso) and get their OWN distinct Schedule-SI
+    # SecCodes (PTI_STCG20P/PTI_STCG30P/PTI_LTCG12_5P112A/PTI_LTCG12_5P),
+    # NOT the ordinary 111A/112/112A rows -- ported verbatim from ITR-2's
+    # own already-working calculator (calculators/itr2.py), deliberately
+    # NOT merged into stcg_result/ltcg_result (which would misclassify it
+    # under the wrong SecCode) and NOT run through CYLA/BFLA, matching
+    # how VDA income is already treated in this same function.
+    pti_cg_gross = sum(
+        (pti.income_amount for pti in (input_data.pti_entries or [])
+         if pti.income_head in ("STCG", "LTCG") and pti.income_amount > 0),
+        z,
+    )
+    r.capital_gains_income = cg_result.total_capital_gains + pti_cg_gross
     r.vda_income = vda_income
     r.schedules["cg"] = cg_result
 
@@ -701,7 +776,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # BEFORE `post_loss_cg_baskets()` ever applies this same netting.
     # Mirrors ITR-2's identical correction (calculators/itr2.py).
     _cg_bucket_keys = ("normal_stcg", "111a", "112", "112a_gross", "stcg_dtaa", "ltcg_dtaa")
-    r.capital_gains_income = sum((post_loss_cg[k] for k in _cg_bucket_keys), z) + vda_income
+    r.capital_gains_income = sum((post_loss_cg[k] for k in _cg_bucket_keys), z) + vda_income + pti_cg_gross
     total_cg_exemption_relief = post_loss_cg.get("exemption_used", z)
     gti_after = max(z, gti_after - total_cg_exemption_relief)
     r.gti_after_loss_setoff = gti_after
@@ -808,6 +883,27 @@ def compute(input_data: ITR3Input) -> ITR3Result:
 
     if vda_income > 0:
         si_entries.append(si_vda(vda_income))
+
+    # Cross-form issue #11 (tracker): Schedule PTI capital gains dispatch
+    # to Schedule SI, ported verbatim from ITR-2's own already-working
+    # calculator (calculators/itr2.py) -- both forms share the identical
+    # PTIEntry.section-based rate routing.
+    from app.engine.schedules.special_rates import (
+        compute_pti_stcg20 as _compute_pti_stcg20,
+        compute_pti_stcg30 as _compute_pti_stcg30,
+        compute_pti_ltcg112a as _compute_pti_ltcg112a,
+        compute_pti_ltcg125 as _compute_pti_ltcg125,
+    )
+    for pti in (input_data.pti_entries or []):
+        if pti.income_amount > 0:
+            if pti.income_head == "STCG" and pti.section == "111A":
+                si_entries.append(_compute_pti_stcg20(pti.income_amount))
+            elif pti.income_head == "STCG":
+                si_entries.append(_compute_pti_stcg30(pti.income_amount))
+            elif pti.income_head == "LTCG" and "112A" in pti.section.upper():
+                si_entries.append(_compute_pti_ltcg112a(pti.income_amount))
+            elif pti.income_head == "LTCG":
+                si_entries.append(_compute_pti_ltcg125(pti.income_amount))
 
     for sie in (input_data.si_entries or []):
         if sie.section == "115BB":
