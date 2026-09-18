@@ -66,6 +66,69 @@ def _workspace_value(workspace: dict[str, Any], *path: str) -> Any:
     return current
 
 
+# Schedule ESR's 9 section rows (form item i-ix) plus its own "Total" row
+# (item x). The frontend's generic auxiliary-schedule editor
+# (ITR3BusinessAuxiliaryManager.tsx) uses a lazy `pathSet()` that only ever
+# creates the exact nested path the taxpayer actually touches -- a return
+# using only, say, Section35_1_i and Section35_2AB leaves the other 7
+# section keys genuinely ABSENT from the saved draft, not present with
+# zero values (the identical "realistic partial input" shape already found
+# and fixed for Schedule DPM/DOA, tracker rows #15-18). The official
+# schema requires all 10 keys unconditionally, so validating the raw,
+# possibly-partial dict directly would raise a hard Pydantic
+# ValidationError for this entirely ordinary case.
+_ESR_SECTION_KEYS = (
+    "Section35_1_i", "Section35_1_ii", "Section35_1_iia", "Section35_1_iii",
+    "Section35_1_iv", "Section35_2AA", "Section35_2AB", "Section35_CCC",
+    "Section35_CCD", "TotUs35",
+)
+
+
+def _normalize_esr_source(esr_source: Mapping) -> dict[str, Any] | None:
+    """Default every Schedule ESR section/leaf a taxpayer left genuinely
+    untouched to 0, matching the official schema's own per-field
+    ``default: 0`` -- without this, a return using only some of the 9
+    section rows crashes JSON generation entirely rather than merely
+    disclosing zero for the untouched ones. Returns None when every leaf
+    across all 9 sections is genuinely zero (nothing entered, or a section
+    typed into and then cleared back to 0) -- matching the established
+    "an explicitly all-zero block must not be mistaken for a real one"
+    precedent from Schedule DPM/DOA (tracker rows #15-18), so this schedule
+    is correctly OMITTED from the JSON rather than emitted as a fabricated
+    zero-filled stub.
+
+    ``TotUs35`` (form item x, the "Total" row) is RECOMPUTED here as the
+    sum of the 9 section rows, rather than trusted from whatever the
+    frontend's own client-side ``recompute()`` last sent -- unlike DPM/DOA/
+    DEP/DCG's own per-field derived values (disclosure-only), this
+    specific total now also feeds Schedule BP's item 28 and, through it,
+    real tax computation (see ``_business_income``'s own
+    ``section35_excess_deduction``); trusting a client-computed aggregate
+    for a tax-affecting figure is the wrong place to add that risk when
+    the exact same arithmetic is trivial to re-derive server-side.
+    """
+    deduction_us35 = esr_source.get("DeductionUs35") if isinstance(esr_source.get("DeductionUs35"), Mapping) else {}
+    sections: dict[str, Any] = {}
+    totals = {"AmtDebPL": Decimal("0"), "AmtUs35Allowable": Decimal("0"), "ExcessAmtOverDebPL": Decimal("0")}
+    for key in _ESR_SECTION_KEYS:
+        if key == "TotUs35":
+            continue
+        raw_section = deduction_us35.get(key) if isinstance(deduction_us35, Mapping) else None
+        raw_detail = raw_section.get("DeductUs35") if isinstance(raw_section, Mapping) else None
+        detail = {
+            "AmtDebPL": _decimal_value(raw_detail.get("AmtDebPL")) if isinstance(raw_detail, Mapping) else Decimal("0"),
+            "AmtUs35Allowable": _decimal_value(raw_detail.get("AmtUs35Allowable")) if isinstance(raw_detail, Mapping) else Decimal("0"),
+            "ExcessAmtOverDebPL": _decimal_value(raw_detail.get("ExcessAmtOverDebPL")) if isinstance(raw_detail, Mapping) else Decimal("0"),
+        }
+        sections[key] = {"DeductUs35": detail}
+        for leaf in totals:
+            totals[leaf] += detail[leaf]
+    if not any(totals.values()):
+        return None
+    sections["TotUs35"] = {"DeductUs35": totals}
+    return {"DeductionUs35": sections}
+
+
 def _core_schedule(draft: ReturnDraft, name: str) -> dict[str, Any] | None:
     """Return a non-empty official core schedule from the business workspace."""
     value = draft.itr3BusinessWorkspace.core.get(name)
@@ -723,7 +786,7 @@ def _depreciation_schedules(draft: ReturnDraft) -> ITR3DepreciationSchedules | N
     )
 
 
-def _business_income(draft: ReturnDraft) -> BusinessIncome:
+def _business_income(draft: ReturnDraft, schedule_esr: "ScheduleESR | None" = None) -> BusinessIncome:
     """Map canonical business rows and the persisted Schedule BP workspace."""
     if not draft.businesses:
         raise DraftMappingError(
@@ -802,8 +865,25 @@ def _business_income(draft: ReturnDraft) -> BusinessIncome:
         # Items 19/23 -- additional disallowances.
         msme_interest_disallowance=_decimal_value(regular.get("InterestDisAllowUs23SMEAct")),
         other_addition_28_to_44da=_decimal_value(regular.get("OthItemDisallowUs28To44DA")),
-        # Items 28/29/30 -- additional deductions.
-        section35_excess_deduction=_decimal_value(regular.get("DebPLUs35ExcessAmt")),
+        # Item 28 -- deduction u/s 35/35CCC/35CCD in excess of the amount
+        # debited to P&L. The official form's own item 28 text cites this
+        # figure as literally "item x(4) of Schedule ESR" (the ESR
+        # schedule's own "Total" row, column 4) -- not an independently
+        # re-derived figure. When Schedule ESR has been filled in (its own
+        # itemized breakdown, auto-totaled by the frontend across all nine
+        # section rows), that computed total is authoritative here, so a
+        # taxpayer's raw `DebPLUs35ExcessAmt` entry can never silently
+        # disagree with their own ESR disclosure. Falls back to the raw
+        # Schedule-BP-workspace value (matching every sibling item 19/23/
+        # 29/30's own established "entered directly" precedent from
+        # Schedule 14's closure) when no ESR data exists at all -- a
+        # taxpayer who only ever used Schedule BP's own quick field keeps
+        # working exactly as before.
+        section35_excess_deduction=(
+            schedule_esr.DeductionUs35.TotUs35.DeductUs35.ExcessAmtOverDebPL
+            if schedule_esr is not None
+            else _decimal_value(regular.get("DebPLUs35ExcessAmt"))
+        ),
         section40_now_allowable=_decimal_value(regular.get("AmtDisallUs40NowAllow")),
         section43b_now_allowable=_decimal_value(regular.get("AmtDisallUs43BNowAllow")),
         # Item 4b's own breakdown (Rule 7/7A/7B(1)/7B(1A)/8 activity profit).
@@ -835,11 +915,12 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
     oi = ITR3PartAOI.model_validate(oi_source) if isinstance(oi_source, Mapping) else None
     qd = ITR3PartAQD.model_validate(qd_source) if isinstance(qd_source, Mapping) else None
     icds_source = draft.itr3BusinessWorkspace.scheduleICDS or draft.itr3BusinessWorkspace.core.get("ScheduleICDS")
-    esr_source = draft.itr3BusinessWorkspace.scheduleESR or draft.itr3BusinessWorkspace.core.get("ScheduleESR")
+    esr_source = draft.itr3BusinessWorkspace.scheduleESR or draft.itr3BusinessWorkspace.core.get("ScheduleESR") or draft.itr3BusinessWorkspace.auxiliary.get("ScheduleESR")
     tpsa_source = draft.itr3BusinessWorkspace.scheduleTPSA or draft.itr3BusinessWorkspace.core.get("ScheduleTPSA") or draft.itr3BusinessWorkspace.auxiliary.get("ScheduleTPSA")
     gst_source = draft.itr3BusinessWorkspace.scheduleGST or draft.itr3BusinessWorkspace.core.get("ScheduleGST")
     schedule_icds = ScheduleICDS.model_validate(icds_source) if isinstance(icds_source, Mapping) else None
-    schedule_esr = ScheduleESR.model_validate(esr_source) if isinstance(esr_source, Mapping) else None
+    _esr_normalized = _normalize_esr_source(esr_source) if isinstance(esr_source, Mapping) else None
+    schedule_esr = ScheduleESR.model_validate(_esr_normalized) if _esr_normalized is not None else None
     schedule_tpsa = ITR3ScheduleTPSA.model_validate(tpsa_source) if isinstance(tpsa_source, Mapping) else None
     schedule_gst = ScheduleGST.model_validate(gst_source) if isinstance(gst_source, Mapping) else None
     schedule_80ia = ITR3Schedule80IA.model_validate(draft.itr3BusinessWorkspace.schedule80IA) if draft.itr3BusinessWorkspace.schedule80IA else None
@@ -960,7 +1041,7 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
             str(draft.filing.filingSection),
             ReturnFileSection.ON_TIME_139_1,
         ),
-        business_income=_business_income(draft),
+        business_income=_business_income(draft, schedule_esr),
         depreciation_schedules=draft.itr3BusinessWorkspace.depreciationSchedules or _depreciation_schedules(draft),
         business_accounts=_business_accounts(draft),
         parta_oi=oi,

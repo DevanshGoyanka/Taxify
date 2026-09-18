@@ -1364,19 +1364,6 @@ def _schedule_tpsa(typed_input: ITR3Input | None) -> dict | None:
     return _serialize_schedule_model(typed_input.schedule_tpsa)
 
 
-def _serialize_schedule_model(model: Any) -> dict:
-    """Convert a prepared typed schedule to schema-bound integer JSON."""
-    def convert(value: Any) -> Any:
-        if isinstance(value, Decimal):
-            return _to_rupees(value)
-        if isinstance(value, dict):
-            return {key: convert(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [convert(item) for item in value]
-        return value
-    return convert(model.model_dump())
-
-
 # ============================================================================
 # Shared schedules (identical to ITR-2 patterns)
 # ============================================================================

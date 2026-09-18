@@ -1531,14 +1531,16 @@ class ScheduleICDS(BaseModel):
 
 class ESRDeductionDetail(BaseModel):
     """Scientific-research expenditure and allowable deduction amounts."""
-    AmtDebPL: Decimal
-    AmtUs35Allowable: Decimal
-    ExcessAmtOverDebPL: Decimal
+    AmtDebPL: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    AmtUs35Allowable: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    ExcessAmtOverDebPL: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    model_config = ConfigDict(extra="forbid")
 
 
 class ESRDeduction(BaseModel):
     """Nested scientific-research deduction disclosure."""
     DeductUs35: ESRDeductionDetail
+    model_config = ConfigDict(extra="forbid")
 
 
 class ESRDeductionUs35(BaseModel):
@@ -1553,11 +1555,13 @@ class ESRDeductionUs35(BaseModel):
     Section35_CCC: ESRDeduction
     Section35_CCD: ESRDeduction
     TotUs35: ESRDeduction
+    model_config = ConfigDict(extra="forbid")
 
 
 class ScheduleESR(BaseModel):
     """Schedule ESR: expenditure on scientific research."""
     DeductionUs35: ESRDeductionUs35
+    model_config = ConfigDict(extra="forbid")
 
 
 
