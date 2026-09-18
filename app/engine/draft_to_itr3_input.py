@@ -544,6 +544,10 @@ def _business_income(draft: ReturnDraft) -> BusinessIncome:
     core = draft.itr3BusinessWorkspace.core
     bp = core.get("ITR3ScheduleBP", {}) if isinstance(core, dict) else {}
     regular = bp.get("BusinessIncOthThanSpec", {}) if isinstance(bp, dict) else {}
+    income_heads = regular.get("IncRecCredPLOthHeadDtls", {}) if isinstance(regular.get("IncRecCredPLOthHeadDtls"), dict) else {}
+    expense_heads = regular.get("ExpDebToPLOthHeadDtls", {}) if isinstance(regular.get("ExpDebToPLOthHeadDtls"), dict) else {}
+    exempt_credits = regular.get("IncCredPL", {}) if isinstance(regular.get("IncCredPL"), dict) else {}
+    rule_profit = regular.get("ProfitFrmActCvrd", {}) if isinstance(regular.get("ProfitFrmActCvrd"), dict) else {}
     return BusinessIncome(
         net_profit_before_tax=_decimal_value(
             regular.get("ProfBfrTaxPL"), declared
@@ -570,11 +574,55 @@ def _business_income(draft: ReturnDraft) -> BusinessIncome:
         deduction_us32_1_iii=_decimal_value(regular.get("DeductUs32_1_iii")),
         icds_increase=_decimal_value(regular.get("IncProfDecLossAccICDSAdj")),
         icds_decrease=_decimal_value(regular.get("DecProfIncLossAccICDSAdj")),
-        # Item 23 / item 31 -- already accepted by the calculator
-        # (compute_pgbp's own other_additions/other_deductions parameters)
-        # but never actually sourced from anywhere, so always silently 0.
-        other_additions=_decimal_value(regular.get("OthItemDisallowUs28To44DA")),
+        # Item 24 / item 31 -- other income not included / other amount
+        # allowable as deduction.
+        other_additions=_decimal_value(regular.get("AnyOthIncNotInclInExpDisallowPL")),
         other_deductions=_decimal_value(regular.get("AnyOthAmtAllDeduct")),
+        # Items 3a-3g -- income credited to P&L belonging to another head.
+        reallocation_income_salary=_decimal_value(income_heads.get("Salary")),
+        reallocation_income_house_property=_decimal_value(income_heads.get("HouseProperty")),
+        reallocation_income_capital_gains=_decimal_value(income_heads.get("CapitalGains")),
+        reallocation_income_other_sources=_decimal_value(income_heads.get("OtherSources")),
+        reallocation_income_dividend=_decimal_value(income_heads.get("Dividend")),
+        reallocation_income_other_than_dividend=_decimal_value(income_heads.get("OtherThanDividend")),
+        reallocation_income_115bbf=_decimal_value(income_heads.get("Us115BBF")),
+        reallocation_income_115bbg=_decimal_value(income_heads.get("Us115BBG")),
+        reallocation_income_115bbh=_decimal_value(income_heads.get("115BBH")),
+        # Items 7a-7g -- expenses debited to P&L relating to another head.
+        reallocation_expense_salary=_decimal_value(expense_heads.get("Salary")),
+        reallocation_expense_house_property=_decimal_value(expense_heads.get("HouseProperty")),
+        reallocation_expense_capital_gains=_decimal_value(expense_heads.get("CapitalGains")),
+        reallocation_expense_other_sources=_decimal_value(expense_heads.get("OtherSources")),
+        reallocation_expense_115bbf=_decimal_value(expense_heads.get("Us115BBF")),
+        reallocation_expense_115bbg=_decimal_value(expense_heads.get("Us115BBG")),
+        reallocation_expense_115bbh=_decimal_value(expense_heads.get("115BBH")),
+        # Items 5a/5b/5c/5A -- exempt / not-chargeable income credited to P&L.
+        exempt_income_firm_share=_decimal_value(exempt_credits.get("FirmShareInc")),
+        exempt_income_aop_boi_share=_decimal_value(exempt_credits.get("AOPBOISharInc")),
+        exempt_income_other=_decimal_value(exempt_credits.get("OthExempInc")),
+        income_not_chargeable=_decimal_value(regular.get("IncCredPLNotChargable")),
+        # Items 8a/8b -- expenses relating to exempt income.
+        expense_relating_to_exempt_income=_decimal_value(regular.get("ExpDebToPLExemptInc")),
+        expense_exempt_income_disallowed_us14a=_decimal_value(regular.get("ExpDebToPLExemptIncDisAllwUs14A")),
+        # Items 19/23 -- additional disallowances.
+        msme_interest_disallowance=_decimal_value(regular.get("InterestDisAllowUs23SMEAct")),
+        other_addition_28_to_44da=_decimal_value(regular.get("OthItemDisallowUs28To44DA")),
+        # Items 28/29/30 -- additional deductions.
+        section35_excess_deduction=_decimal_value(regular.get("DebPLUs35ExcessAmt")),
+        section40_now_allowable=_decimal_value(regular.get("AmtDisallUs40NowAllow")),
+        section43b_now_allowable=_decimal_value(regular.get("AmtDisallUs43BNowAllow")),
+        # Item 4b's own breakdown (Rule 7/7A/7B(1)/7B(1A)/8 activity profit).
+        rule7_profit=_decimal_value(rule_profit.get("ProfitFrmActCvrdUndrRule7")),
+        rule7a_profit=_decimal_value(rule_profit.get("ProfitFrmActCvrdUndrRule7A")),
+        rule7b1_profit=_decimal_value(rule_profit.get("ProfitFrmActCvrdUndrRule7B1")),
+        rule7b1a_profit=_decimal_value(rule_profit.get("ProfitFrmActCvrdUndrRule7B1A")),
+        rule8_profit=_decimal_value(rule_profit.get("ProfitFrmActCvrdUndrRule8")),
+        # Items 37a-37e -- the taxpayer's own rule-adjusted taxable income.
+        rule7_taxable_income=_decimal_value(regular.get("ChrgblIncUndrRule7")),
+        rule7a_deemed_income=_decimal_value(regular.get("DeemedChrgblIncUndrRule7A")),
+        rule7b1_deemed_income=_decimal_value(regular.get("DeemedChrgblIncUndrRule7B1")),
+        rule7b1a_deemed_income=_decimal_value(regular.get("DeemedChrgblIncUndrRule7B1A")),
+        rule8_deemed_income=_decimal_value(regular.get("DeemedChrgblIncUndrRule8")),
     )
 
 

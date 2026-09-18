@@ -187,6 +187,41 @@ def compute(input_data: ITR3Input) -> ITR3Result:
             icds_decrease=bi.icds_decrease,
             other_additions=bi.other_additions,
             other_deductions=bi.other_deductions,
+            reallocation_income_salary=bi.reallocation_income_salary,
+            reallocation_income_house_property=bi.reallocation_income_house_property,
+            reallocation_income_capital_gains=bi.reallocation_income_capital_gains,
+            reallocation_income_other_sources=bi.reallocation_income_other_sources,
+            reallocation_income_115bbf=bi.reallocation_income_115bbf,
+            reallocation_income_115bbg=bi.reallocation_income_115bbg,
+            reallocation_income_115bbh=bi.reallocation_income_115bbh,
+            reallocation_expense_salary=bi.reallocation_expense_salary,
+            reallocation_expense_house_property=bi.reallocation_expense_house_property,
+            reallocation_expense_capital_gains=bi.reallocation_expense_capital_gains,
+            reallocation_expense_other_sources=bi.reallocation_expense_other_sources,
+            reallocation_expense_115bbf=bi.reallocation_expense_115bbf,
+            reallocation_expense_115bbg=bi.reallocation_expense_115bbg,
+            reallocation_expense_115bbh=bi.reallocation_expense_115bbh,
+            exempt_income_firm_share=bi.exempt_income_firm_share,
+            exempt_income_aop_boi_share=bi.exempt_income_aop_boi_share,
+            exempt_income_other=bi.exempt_income_other,
+            income_not_chargeable=bi.income_not_chargeable,
+            expense_relating_to_exempt_income=bi.expense_relating_to_exempt_income,
+            expense_exempt_income_disallowed_us14a=bi.expense_exempt_income_disallowed_us14a,
+            msme_interest_disallowance=bi.msme_interest_disallowance,
+            other_addition_28_to_44da=bi.other_addition_28_to_44da,
+            section35_excess_deduction=bi.section35_excess_deduction,
+            section40_now_allowable=bi.section40_now_allowable,
+            section43b_now_allowable=bi.section43b_now_allowable,
+            rule7_profit=bi.rule7_profit,
+            rule7a_profit=bi.rule7a_profit,
+            rule7b1_profit=bi.rule7b1_profit,
+            rule7b1a_profit=bi.rule7b1a_profit,
+            rule8_profit=bi.rule8_profit,
+            rule7_taxable_income=bi.rule7_taxable_income,
+            rule7a_deemed_income=bi.rule7a_deemed_income,
+            rule7b1_deemed_income=bi.rule7b1_deemed_income,
+            rule7b1a_deemed_income=bi.rule7b1a_deemed_income,
+            rule8_deemed_income=bi.rule8_deemed_income,
             speculative_net_pl=bi.speculative_net_pl,
             speculative_additions=bi.speculative_additions,
             speculative_deductions=bi.speculative_deductions,
@@ -440,13 +475,28 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     has_pgbp = pgbp is not None
     # Note: STCG/LTCG intra-head losses already netted by aggregate().
     # Business and HP losses are cross-head and handled here.
+    # Non-speculative business loss/income and speculative business income
+    # are fed post-Part-E (the Schedule BP Part E intra-head set-off of a
+    # regular business loss against speculative/specified business income,
+    # already computed inside compute_pgbp itself) -- NOT the raw signed
+    # pgbp.non_spec_signed/pgbp.speculative_signed. Using the raw figures
+    # here would let the same rupee of speculative/specified income be
+    # used twice: once by Part E's own intra-head absorption, and again by
+    # CYLA's cross-head absorption of an unrelated HP/CG loss. Speculative
+    # business's OWN loss (spec_biz_loss, when speculative_signed itself is
+    # negative) is a separate, pre-existing scenario Part E does not touch
+    # (Part E only ever absorbs a NON-speculative loss), so it is left
+    # sourced from the raw signed value exactly as before.
+    non_spec_biz_loss_for_cyla = pgbp.part_e_loss_remaining if has_pgbp else z
+    non_spec_biz_income_for_cyla = pgbp.non_spec_net_income if has_pgbp else z
+    spec_biz_income_for_cyla = pgbp.part_e_speculative_income_after_setoff if has_pgbp else z
     cy_input = CYLAInput(
         hp_loss=r.house_property_income if r.house_property_income < 0 else z,
         hp_income=r.house_property_income if r.house_property_income > 0 else z,
-        non_spec_biz_loss=pgbp.non_spec_signed if has_pgbp and pgbp.non_spec_signed < 0 else z,
-        non_spec_biz_income=pgbp.non_spec_net_income if has_pgbp and pgbp.non_spec_net_income > 0 else z,
+        non_spec_biz_loss=non_spec_biz_loss_for_cyla,
+        non_spec_biz_income=non_spec_biz_income_for_cyla,
         spec_biz_loss=pgbp.speculative_signed if has_pgbp and pgbp.speculative_signed < 0 else z,
-        spec_biz_income=pgbp.speculative_net_income if has_pgbp and pgbp.speculative_net_income > 0 else z,
+        spec_biz_income=spec_biz_income_for_cyla,
         stcg20_income=z,
         stcg30_income=z,
         stcg_app_income=cg_result.total_capital_gains if cg_result.total_capital_gains > 0 else z,

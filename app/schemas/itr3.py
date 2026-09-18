@@ -360,6 +360,83 @@ class BusinessIncome(BaseModel):
     presumptive_44ada_income: Decimal = Field(default=Decimal("0"), ge=0)
     presumptive_44ae_income: Decimal = Field(default=Decimal("0"), ge=0)
 
+    # Items 3a-3g -- income/receipts credited to the P&L account but
+    # actually chargeable under another head (this engine computes
+    # Salary/HP/CG/OS income independently from their own typed inputs, so
+    # any such amount must be SUBTRACTED here to avoid double-taxing it
+    # once under business income and once under its true head).
+    # "OtherSources" is item 3d itself (the figure actually subtracted);
+    # Dividend/OtherThanDividend are item 3di/3dii, the form's own
+    # informational dividend-vs-other split of 3d -- disclosed but not
+    # separately subtracted (would double-count 3d).
+    reallocation_income_salary: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_income_house_property: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_income_capital_gains: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_income_other_sources: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_income_dividend: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_income_other_than_dividend: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_income_115bbf: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_income_115bbg: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_income_115bbh: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Items 7a-7g -- expenses debited to the P&L account but relating to
+    # another head's income; must be ADDED BACK (they should never have
+    # reduced business income in the first place).
+    reallocation_expense_salary: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_expense_house_property: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_expense_capital_gains: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_expense_other_sources: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_expense_115bbf: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_expense_115bbg: Decimal = Field(default=Decimal("0"), ge=0)
+    reallocation_expense_115bbh: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Item 5a/5b/5c -- exempt income credited to the P&L account (firm/AOP
+    # share, any other exempt income); item 5A -- receipts credited to the
+    # P&L account but not chargeable to tax under the Act at all. All
+    # SUBTRACTED (genuinely non-taxable, must not inflate business income).
+    exempt_income_firm_share: Decimal = Field(default=Decimal("0"), ge=0)
+    exempt_income_aop_boi_share: Decimal = Field(default=Decimal("0"), ge=0)
+    exempt_income_other: Decimal = Field(default=Decimal("0"), ge=0)
+    income_not_chargeable: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Item 8a/8b -- expenses debited to the P&L account relating to exempt
+    # income (8b specifically disallowed u/s 14A). ADDED BACK.
+    expense_relating_to_exempt_income: Decimal = Field(default=Decimal("0"), ge=0)
+    expense_exempt_income_disallowed_us14a: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Item 19/23 -- additional disallowances with no other typed field:
+    # MSME interest (s.23 of the MSMED Act) and any other s.28-44DA addition.
+    msme_interest_disallowance: Decimal = Field(default=Decimal("0"), ge=0)
+    other_addition_28_to_44da: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Item 28/29/30 -- additional deductions with no other typed field:
+    # s.35/35CCC/35CCD excess over P&L, and amounts disallowed in an
+    # earlier year under s.40/s.43B now allowable this year.
+    section35_excess_deduction: Decimal = Field(default=Decimal("0"), ge=0)
+    section40_now_allowable: Decimal = Field(default=Decimal("0"), ge=0)
+    section43b_now_allowable: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Item 4b's own breakdown (form's "Profit from activities covered
+    # under rule 7, 7A, 7B(1), 7B(1A) and 8") -- profit from a composite
+    # agricultural-and-business activity (tea/coffee/rubber growing and
+    # manufacturing), SUBTRACTED from ordinary business income at item 6.
+    rule7_profit: Decimal = Field(default=Decimal("0"), ge=0)
+    rule7a_profit: Decimal = Field(default=Decimal("0"), ge=0)
+    rule7b1_profit: Decimal = Field(default=Decimal("0"), ge=0)
+    rule7b1a_profit: Decimal = Field(default=Decimal("0"), ge=0)
+    rule8_profit: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Item 37a-37e -- the taxpayer's own Rule 7/7A/7B(1)/7B(1A)/8-computed
+    # taxable (non-agricultural) portion of the item-4b composite profit,
+    # ADDED into item A37 on top of item 36 (which already excluded the
+    # raw item-4b profit). The difference (item 4b minus this total) is
+    # item 38, the portion deemed agricultural income (outside this head).
+    rule7_taxable_income: Decimal = Field(default=Decimal("0"), ge=0)
+    rule7a_deemed_income: Decimal = Field(default=Decimal("0"), ge=0)
+    rule7b1_deemed_income: Decimal = Field(default=Decimal("0"), ge=0)
+    rule7b1a_deemed_income: Decimal = Field(default=Decimal("0"), ge=0)
+    rule8_deemed_income: Decimal = Field(default=Decimal("0"), ge=0)
+
     # Speculative business
     speculative_net_pl: Decimal = Field(default=Decimal("0"))
     speculative_additions: Decimal = Field(default=Decimal("0"), ge=0)

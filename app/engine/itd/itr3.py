@@ -645,10 +645,18 @@ def _parta_gen2(typed_input: ITR3Input | None = None) -> dict:
 def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> dict:
     """Build Schedule BP from calculated totals and explicit typed adjustments.
 
-    The form's rows 11--34 are an arithmetic bridge, not independent totals:
-    book depreciation is added back, tax depreciation is deducted, and the
-    typed Part A-OI/ICDS amounts flow into their corresponding rows.  Values
-    without a typed source remain zero rather than being inferred.
+    The form's rows 6--38 are an arithmetic bridge, not independent totals:
+    cross-head income/expense reallocation (3a-3g/7a-7g), exempt income
+    (5a-5d/5A/8a/8b), Rule 7/7A/7B/8 composite income (4b/37a-38), book
+    depreciation, tax depreciation, and the typed Part-A-OI-cross-referenced
+    disallowances/deductions (19/23/28/29/30) all flow through this chain
+    to reach items 34/36/A37 -- every term here matches the identical
+    formula already applied inside ``compute_pgbp()`` itself
+    (``app/engine/schedules/business.py``), so ``row36``/``rowA37`` below
+    always equal ``pgbp.non_spec_item36_signed``/``pgbp.non_spec_signed``
+    exactly (proven algebraically and locked in by
+    ``test_itr3_schedule_bp_reallocation_and_exempt_income_reduce_taxable_income``
+    and the neutrality tests below it).
     """
     pgbp = result.schedules.get("pgbp")
     z = Decimal("0")
@@ -657,13 +665,13 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
     if pgbp:
         non_spec_pbt = pgbp.non_spec_profit_before_tax
         non_spec_signed = pgbp.non_spec_signed
-        spec = pgbp.speculative_net_income
-        specified = pgbp.specified_net_income
+        spec_signed = pgbp.speculative_signed
+        specified_signed = pgbp.specified_signed
         total_biz = pgbp.total_business_income
         books_depr = pgbp.non_spec_depreciation_books
         it_depr = pgbp.non_spec_depreciation_it
     else:
-        non_spec_pbt = non_spec_signed = spec = specified = total_biz = books_depr = it_depr = z
+        non_spec_pbt = non_spec_signed = spec_signed = specified_signed = total_biz = books_depr = it_depr = z
 
     def amount(name: str) -> Decimal:
         """Read one non-negative typed business adjustment."""
@@ -679,24 +687,72 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
     presumptive_ae = amount("presumptive_44ae_income")
     presumptive_total = presumptive_ad + presumptive_ada + presumptive_ae
 
-    # Item 6 = 1 - 2a - 2b - 3(a-g) - 4a - 4b - 5d - 5A. Only item 1 and
-    # item 4a (presumptive income) have a typed source; items 2a/2b are
+    # Items 3a-3g -- income/receipts credited to P&L but chargeable under
+    # another head. "OtherSources" (3d) is the figure actually subtracted;
+    # Dividend/OtherThanDividend (3di/3dii) are 3d's own informational
+    # dividend-vs-other split, disclosed but not separately subtracted
+    # (that would double-count 3d).
+    realloc_inc_salary = amount("reallocation_income_salary")
+    realloc_inc_hp = amount("reallocation_income_house_property")
+    realloc_inc_cg = amount("reallocation_income_capital_gains")
+    realloc_inc_os = amount("reallocation_income_other_sources")
+    realloc_inc_dividend = amount("reallocation_income_dividend")
+    realloc_inc_other_div = amount("reallocation_income_other_than_dividend")
+    realloc_inc_115bbf = amount("reallocation_income_115bbf")
+    realloc_inc_115bbg = amount("reallocation_income_115bbg")
+    realloc_inc_115bbh = amount("reallocation_income_115bbh")
+    realloc_income_total = (
+        realloc_inc_salary + realloc_inc_hp + realloc_inc_cg + realloc_inc_os
+        + realloc_inc_115bbf + realloc_inc_115bbg + realloc_inc_115bbh
+    )
+
+    # Item 4b -- profit from a composite Rule 7/7A/7B(1)/7B(1A)/8 activity
+    # (tea/coffee/rubber growing-and-manufacturing), subtracted here and
+    # re-introduced (at its taxpayer-computed, rule-adjusted figure) via
+    # items 37a-37e below.
+    rule7_profit = amount("rule7_profit")
+    rule7a_profit = amount("rule7a_profit")
+    rule7b1_profit = amount("rule7b1_profit")
+    rule7b1a_profit = amount("rule7b1a_profit")
+    rule8_profit = amount("rule8_profit")
+    rule_7_8_total = rule7_profit + rule7a_profit + rule7b1_profit + rule7b1a_profit + rule8_profit
+
+    # Items 5a/5b/5c/5A -- exempt / not-chargeable income credited to P&L.
+    exempt_firm = amount("exempt_income_firm_share")
+    exempt_aop = amount("exempt_income_aop_boi_share")
+    exempt_other = amount("exempt_income_other")
+    exempt_total = exempt_firm + exempt_aop + exempt_other
+    not_chargeable = amount("income_not_chargeable")
+
+    # Item 6 = 1 - 2a - 2b - 3(a-g) - 4a - 4b - 5d - 5A. Items 2a/2b are
     # structurally 0 by this codebase's own architecture (speculative/
     # specified P&L are tracked as separate fields, never co-mingled into
-    # net_profit_before_tax); items 3/4b/5/5A have no typed source
-    # anywhere (cross-head income/expense reallocation and Rule 7/7A/7B/8
-    # composite-income disclosures are not captured on the draft model at
-    # all) and stay 0, deliberately deferred -- not merely unmapped.
-    row6 = non_spec_pbt - presumptive_total
-    # Item 9 = 7a+...+7g+8a+8b -- no typed source for any of these
-    # (cross-head expense reallocation / exempt-income-related expenses),
-    # deliberately deferred.
-    row9 = z
+    # net_profit_before_tax).
+    row6 = (
+        non_spec_pbt - presumptive_total - realloc_income_total - rule_7_8_total
+        - exempt_total - not_chargeable
+    )
+
+    # Items 7a-7g / 8a / 8b -- expenses debited to P&L relating to another
+    # head or to exempt income; added back (they should never have
+    # reduced business income).
+    realloc_exp_salary = amount("reallocation_expense_salary")
+    realloc_exp_hp = amount("reallocation_expense_house_property")
+    realloc_exp_cg = amount("reallocation_expense_capital_gains")
+    realloc_exp_os = amount("reallocation_expense_other_sources")
+    realloc_exp_115bbf = amount("reallocation_expense_115bbf")
+    realloc_exp_115bbg = amount("reallocation_expense_115bbg")
+    realloc_exp_115bbh = amount("reallocation_expense_115bbh")
+    realloc_expense_total = (
+        realloc_exp_salary + realloc_exp_hp + realloc_exp_cg + realloc_exp_os
+        + realloc_exp_115bbf + realloc_exp_115bbg + realloc_exp_115bbh
+    )
+    expense_exempt_8a = amount("expense_relating_to_exempt_income")
+    expense_exempt_8b = amount("expense_exempt_income_disallowed_us14a")
+    row9 = realloc_expense_total + expense_exempt_8a + expense_exempt_8b
+
     # Item 10 = 6 + 9 (NOT yet adjusted for depreciation -- items 11/12
-    # are a separate step feeding item 13, not item 10). Previously item
-    # 10 and item 13 were both set to the SAME (already depreciation-
-    # adjusted) value, silently double-counting the depreciation
-    # adjustment once row 26's additions were later re-applied on top.
+    # are a separate step feeding item 13, not item 10).
     row10 = row6 + row9
     # Item 13 = 10 + 11 - 12iii.
     row13 = row10 + books_depr - it_depr
@@ -705,6 +761,8 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
     row16 = amount("disallowance_us40")
     row17 = amount("disallowance_us40a")
     row18 = amount("disallowance_us43b")
+    # Item 19 -- MSME interest disallowance (s.23 of the MSMED Act).
+    row19 = amount("msme_interest_disallowance")
     row20 = amount("deemed_income_us41")
     row21 = sum((amount(name) for name in (
         "deemed_income_us32ad", "deemed_income_us33ab", "deemed_income_us33aba",
@@ -712,42 +770,81 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
         "deemed_income_us72a", "deemed_income_us80hhd", "deemed_income_us80ia",
     )), z)
     row22 = amount("deemed_income_us43ca")
+    # Item 23 -- any other item of addition under section 28 to 44DA.
+    row23 = amount("other_addition_28_to_44da")
     row24 = amount("other_additions")
     row25 = amount("icds_increase")
     row27 = amount("deduction_us32_1_iii")
+    # Items 28/29/30 -- s.35/35CCC/35CCD excess deduction, and amounts
+    # disallowed in an earlier year under s.40/s.43B now allowable.
+    row28 = amount("section35_excess_deduction")
+    row29 = amount("section40_now_allowable")
+    row30 = amount("section43b_now_allowable")
     row31 = amount("other_deductions")
     row32 = amount("icds_decrease")
-    # Item 26 = sum(14..25); item 33 = sum(27..32) -- items 19/23 (MSME
-    # interest disallowance, other 28-44DA additions) and 28/29/30 (ESR
-    # excess deduction, section 40/43B now-allowable) have no typed source
-    # wired into this total; each has an exact same-document cross-
-    # reference available on the already-closed Part A-OI (items 17, 8B,
-    # 10i respectively) but is deliberately NOT read here yet, since doing
-    # so would make this disclosure diverge from what the calculator (which
-    # does not read Part A-OI at all) actually used for total_biz/GTI --
-    # wiring them safely needs the calculator itself extended first, a
-    # larger change than this schedule's own disclosure fix.
-    total_additions = sum((row14, row15, row16, row17, row18, row20, row21, row22, row24, row25), z)
-    total_deductions = row27 + row31 + row32
+    # Item 26 = sum(14..25); item 33 = sum(27..32).
+    total_additions = sum((row14, row15, row16, row17, row18, row19, row20, row21, row22, row23, row24, row25), z)
+    total_deductions = sum((row27, row28, row29, row30, row31, row32), z)
     # Item 34 = 13 + 26 - 33.
     row34 = row13 + total_additions - total_deductions
-    # Item 36 = 34 + 35viii. Item 37 (Rule 7/7A/7B/8 adjustment) has no
-    # typed source (no composite-income data captured anywhere) so stays
-    # equal to item 36, matching the form's own "if rule 7A/7B/8 is not
-    # applicable, enter same figure as in 36" instruction.
+    # Item 36 = 34 + 35viii.
     row36 = row34 + presumptive_total
-    # By construction, row36 always equals pgbp.non_spec_signed exactly
-    # (the unclamped total the calculator itself used for GTI) -- proven
-    # algebraically and locked in by
-    # test_itr3_schedule_bp_presumptive_breakdown_does_not_change_total_income.
 
-    _bus_loss_obj = {
-        "LossSetOffOnBusLoss": 0,
-        "SpeculativeInc": {"BusLossSetoff": 0, "IncOfCurYrUnderThatHead": 0, "IncOfCurYrAfterSetOff": 0},
-        "SpecifiedInc": {"BusLossSetoff": 0, "IncOfCurYrUnderThatHead": 0, "IncOfCurYrAfterSetOff": 0},
-        "TotLossSetOffOnBus": 0,
-        "LossRemainSetOffOnBus": 0,
-    }
+    # Items 37a-37e -- the taxpayer's own Rule 7/7A/7B(1)/7B(1A)/8-adjusted
+    # taxable (non-agricultural) portion of the item-4b composite profit,
+    # added on top of item 36 (37f, "income other than Rule 7A/7B/8") to
+    # reach item A37. When no composite-income business is declared, all
+    # five stay 0 and A37 == 36 exactly, matching the form's own "if rule
+    # 7A, 7B or 8 is not applicable, enter same figure as in 36".
+    rule7_taxable = amount("rule7_taxable_income")
+    rule7a_deemed = amount("rule7a_deemed_income")
+    rule7b1_deemed = amount("rule7b1_deemed_income")
+    rule7b1a_deemed = amount("rule7b1a_deemed_income")
+    rule8_deemed = amount("rule8_deemed_income")
+    rule_7_8_taxable_total = rule7_taxable + rule7a_deemed + rule7b1_deemed + rule7b1a_deemed + rule8_deemed
+    row37f = row36
+    row_a37 = rule7_taxable + rule7a_deemed + rule7b1_deemed + rule7b1a_deemed + rule8_deemed + row37f
+    # Item 38 -- balance of income deemed to be from agriculture:
+    # 4b - (37a+37b+37c+37d+37e).
+    row38 = rule_7_8_total - rule_7_8_taxable_total
+    # By construction, row36/row_a37 always equal
+    # pgbp.non_spec_item36_signed/pgbp.non_spec_signed exactly (the same
+    # unclamped totals compute_pgbp itself used for GTI/CYLA) -- proven
+    # algebraically and locked in by the reallocation/rule-7-8 neutrality
+    # tests in tests/test_itr3_business_deductions.py.
+
+    # Part E -- intra-head (Section 70) set-off of a non-speculative
+    # business LOSS (item A37, if negative) against speculative/specified
+    # business INCOME (B42/C48), read directly from the already-computed
+    # pgbp result (compute_pgbp performs this same calculation for its own
+    # CYLA-feed purposes, so the disclosure here matches the actual
+    # cross-head loss handling exactly rather than being independently
+    # re-derived and risking drift).
+    if pgbp:
+        part_e_loss_row = non_spec_signed if non_spec_signed < 0 else z
+        _bus_loss_obj = {
+            "LossSetOffOnBusLoss": _to_rupees(part_e_loss_row),
+            "SpeculativeInc": {
+                "BusLossSetoff": _to_rupees(pgbp.part_e_speculative_setoff),
+                "IncOfCurYrUnderThatHead": _to_rupees(pgbp.part_e_speculative_income),
+                "IncOfCurYrAfterSetOff": _to_rupees(pgbp.part_e_speculative_income_after_setoff),
+            },
+            "SpecifiedInc": {
+                "BusLossSetoff": _to_rupees(pgbp.part_e_specified_setoff),
+                "IncOfCurYrUnderThatHead": _to_rupees(pgbp.part_e_specified_income),
+                "IncOfCurYrAfterSetOff": _to_rupees(pgbp.part_e_specified_income_after_setoff),
+            },
+            "TotLossSetOffOnBus": _to_rupees(pgbp.part_e_total_setoff),
+            "LossRemainSetOffOnBus": _to_rupees(pgbp.part_e_loss_remaining),
+        }
+    else:
+        _bus_loss_obj = {
+            "LossSetOffOnBusLoss": 0,
+            "SpeculativeInc": {"BusLossSetoff": 0, "IncOfCurYrUnderThatHead": 0, "IncOfCurYrAfterSetOff": 0},
+            "SpecifiedInc": {"BusLossSetoff": 0, "IncOfCurYrUnderThatHead": 0, "IncOfCurYrAfterSetOff": 0},
+            "TotLossSetOffOnBus": 0,
+            "LossRemainSetOffOnBus": 0,
+        }
 
     _pl_us = {
         "ProfitLossUs44AD": _to_rupees(presumptive_ad), "ProfitLossUs44ADA": _to_rupees(presumptive_ada), "ProfitLossUs44AE": _to_rupees(presumptive_ae),
@@ -762,14 +859,22 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
     }
 
     _heads_inc = {
-        "Salary": 0, "HouseProperty": 0, "CapitalGains": 0,
-        "Dividend": 0, "OtherThanDividend": 0, "OtherSources": 0,
-        "115BBH": 0, "Us115BBF": 0, "Us115BBG": 0,
+        "Salary": _to_rupees(realloc_inc_salary), "HouseProperty": _to_rupees(realloc_inc_hp), "CapitalGains": _to_rupees(realloc_inc_cg),
+        "Dividend": _to_rupees(realloc_inc_dividend), "OtherThanDividend": _to_rupees(realloc_inc_other_div), "OtherSources": _to_rupees(realloc_inc_os),
+        "115BBH": _to_rupees(realloc_inc_115bbh), "Us115BBF": _to_rupees(realloc_inc_115bbf), "Us115BBG": _to_rupees(realloc_inc_115bbg),
     }
 
     _heads_exp = {
-        "Salary": 0, "HouseProperty": 0, "CapitalGains": 0,
-        "OtherSources": 0, "115BBH": 0, "Us115BBF": 0, "Us115BBG": 0,
+        "Salary": _to_rupees(realloc_exp_salary), "HouseProperty": _to_rupees(realloc_exp_hp), "CapitalGains": _to_rupees(realloc_exp_cg),
+        "OtherSources": _to_rupees(realloc_exp_os), "115BBH": _to_rupees(realloc_exp_115bbh), "Us115BBF": _to_rupees(realloc_exp_115bbf), "Us115BBG": _to_rupees(realloc_exp_115bbg),
+    }
+
+    _exempt_credit = {"FirmShareInc": _to_rupees(exempt_firm), "AOPBOISharInc": _to_rupees(exempt_aop), "OthExempInc": _to_rupees(exempt_other), "TotExempIncPL": _to_rupees(exempt_total)}
+
+    _rule_profit = {
+        "ProfitFrmActCvrdUndrRule7": _to_rupees(rule7_profit), "ProfitFrmActCvrdUndrRule7A": _to_rupees(rule7a_profit),
+        "ProfitFrmActCvrdUndrRule7B1": _to_rupees(rule7b1_profit), "ProfitFrmActCvrdUndrRule7B1A": _to_rupees(rule7b1a_profit),
+        "ProfitFrmActCvrdUndrRule8": _to_rupees(rule8_profit),
     }
 
     return {
@@ -781,34 +886,36 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
             "IncRecCredPLOthHeadDtls": _heads_inc,
             "PLUs44sChapXIIG": 0,
             "ProfitLossInclRefrdSec": _pl_us,
-            "TotalProfitFrmActCvrd": 0,
-            "ProfitFrmActCvrd": {"ProfitFrmActCvrdUndrRule7": 0, "ProfitFrmActCvrdUndrRule7A": 0, "ProfitFrmActCvrdUndrRule7B1": 0, "ProfitFrmActCvrdUndrRule7B1A": 0, "ProfitFrmActCvrdUndrRule8": 0,},
-            "IncCredPL": {"FirmShareInc": 0, "AOPBOISharInc": 0, "OtherExmptIncDtl": {"OperatingDividendName": "Dividend", "OperatingDividendAmt": 0}, "OthExempInc": 0, "TotExempIncPL": 0},
-            "IncCredPLNotChargable": 0, "BalancePLOthThanSpecBus": _to_rupees(row6),
-            "ExpDebToPLOthHeadDtls": _heads_exp, "ExpDebToPLExemptInc": 0, "ExpDebToPLExemptIncDisAllwUs14A": 0,
+            "TotalProfitFrmActCvrd": _to_rupees(rule_7_8_total),
+            "ProfitFrmActCvrd": _rule_profit,
+            "IncCredPL": _exempt_credit,
+            "IncCredPLNotChargable": _to_rupees(not_chargeable), "BalancePLOthThanSpecBus": _to_rupees(row6),
+            "ExpDebToPLOthHeadDtls": _heads_exp, "ExpDebToPLExemptInc": _to_rupees(expense_exempt_8a), "ExpDebToPLExemptIncDisAllwUs14A": _to_rupees(expense_exempt_8b),
             "TotExpDebPL": _to_rupees(row9), "AdjustedPLOthThanSpecBus": _to_rupees(row10),
             "DepreciationDebPLCosAct": _to_rupees(books_depr),
             "DepreciationAllowITAct32": {"DepreciationAllowUs32_1_ii": _to_rupees(it_depr), "DepreciationAllowUs32_1_i": 0, "TotDeprAllowITAct": _to_rupees(it_depr)},
             "AdjustPLAfterDeprOthSpecInc": _to_rupees(row13),
             "AmtDebPLDisallowUs36": _to_rupees(row14), "AmtDebPLDisallowUs37": _to_rupees(row15), "AmtDebPLDisallowUs40": _to_rupees(row16),
-            "AmtDebPLDisallowUs40A": _to_rupees(row17), "AmtDebPLDisallowUs43B": _to_rupees(row18), "InterestDisAllowUs23SMEAct": 0,
+            "AmtDebPLDisallowUs40A": _to_rupees(row17), "AmtDebPLDisallowUs43B": _to_rupees(row18), "InterestDisAllowUs23SMEAct": _to_rupees(row19),
             "DeemIncUs41": _to_rupees(row20), "DeemIncUs32AD": _to_rupees(amount("deemed_income_us32ad")), "DeemIncUs33AB": _to_rupees(amount("deemed_income_us33ab")),
             "DeemIncUs33ABA": _to_rupees(amount("deemed_income_us33aba")), "DeemIncUs35ABA": _to_rupees(amount("deemed_income_us35aba")), "DeemIncUs35ABB": _to_rupees(amount("deemed_income_us35abb")),
             "DeemIncUs40A3A": _to_rupees(amount("deemed_income_us40a3a")), "DeemIncUs72A": _to_rupees(amount("deemed_income_us72a")), "DeemIncUs80HHD": _to_rupees(amount("deemed_income_us80hhd")),
             # Item 21's own combined total (the form prints 32AD/33AB/33ABA/
             # 35ABA/35ABB/40A(3A)/72A/80HHD/80-IA as ONE single line item,
-            # not nine separate rows) -- previously hardcoded 0 even though
-            # row21 (the exact sum) was already computed for total_additions.
-            "DeemIncUs80IA": _to_rupees(amount("deemed_income_us80ia")), "DeemIncUs3380HHD80IA": _to_rupees(row21), "DeemIncUs43CA": _to_rupees(row22), "OthItemDisallowUs28To44DA": 0,
+            # not nine separate rows).
+            "DeemIncUs80IA": _to_rupees(amount("deemed_income_us80ia")), "DeemIncUs3380HHD80IA": _to_rupees(row21), "DeemIncUs43CA": _to_rupees(row22), "OthItemDisallowUs28To44DA": _to_rupees(row23),
             "AnyOthIncNotInclInExpDisallowPL": _to_rupees(row24), "AnyOthIncNotInclInSalary": 0, "AnyOthIncNotInclInBonus": 0, "AnyOthIncNotInclInCommission": 0, "AnyOthIncNotInclInInterest": 0, "AnyOthIncNotInclInOthers": 0,
-            "IncProfDecLossAccICDSAdj": _to_rupees(row25), "TotAfterAddToPLDeprOthSpecInc": _to_rupees(row13 + total_additions), "DeductUs32_1_iii": _to_rupees(row27), "DebPLUs35ExcessAmt": 0,
-            "AmtDisallUs40NowAllow": 0, "AmtDisallUs43BNowAllow": 0, "AnyOthAmtAllDeduct": _to_rupees(row31), "DecProfIncLossAccICDSAdj": _to_rupees(row32), "TotDeductionAmts": _to_rupees(total_deductions),
+            "IncProfDecLossAccICDSAdj": _to_rupees(row25), "TotAfterAddToPLDeprOthSpecInc": _to_rupees(row13 + total_additions), "DeductUs32_1_iii": _to_rupees(row27), "DebPLUs35ExcessAmt": _to_rupees(row28),
+            "AmtDisallUs40NowAllow": _to_rupees(row29), "AmtDisallUs43BNowAllow": _to_rupees(row30), "AnyOthAmtAllDeduct": _to_rupees(row31), "DecProfIncLossAccICDSAdj": _to_rupees(row32), "TotDeductionAmts": _to_rupees(total_deductions),
             "PLAftAdjDedBusOthThanSpec": _to_rupees(row34), "DeemedProfitBusUs": _deemed_profit_us,
-            "NetPLAftAdjBusOthThanSpec": _to_rupees(row36), "NetPLBusOthThanSpec7A7B7C": _to_rupees(row36), "ChrgblIncUndrRule7": 0, "DeemedChrgblIncUndrRule7A": 0, "DeemedChrgblIncUndrRule7B1": 0, "DeemedChrgblIncUndrRule7B1A": 0, "DeemedChrgblIncUndrRule8": 0, "IncomeOtherThanRule": _to_rupees(row36), "BalIncDeemedFrmAgri": 0,
+            "NetPLAftAdjBusOthThanSpec": _to_rupees(row36), "NetPLBusOthThanSpec7A7B7C": _to_rupees(row_a37),
+            "ChrgblIncUndrRule7": _to_rupees(rule7_taxable), "DeemedChrgblIncUndrRule7A": _to_rupees(rule7a_deemed), "DeemedChrgblIncUndrRule7B1": _to_rupees(rule7b1_deemed),
+            "DeemedChrgblIncUndrRule7B1A": _to_rupees(rule7b1a_deemed), "DeemedChrgblIncUndrRule8": _to_rupees(rule8_deemed),
+            "IncomeOtherThanRule": _to_rupees(row37f), "BalIncDeemedFrmAgri": _to_rupees(row38),
         },
         "IncChrgUnHdProftGain": _to_rupees(total_biz),
-        "SpecBusinessInc": {"NetPLFrmSpecBus": _to_rupees(spec), "AdditionUs28to44DA": 0, "DeductUs28to44DA": 0, "AdjustedPLFrmSpecuBus": _to_rupees(spec)},
-        "SpecifiedBusinessInc": {"NetPLFrmSpecifiedBus": _to_rupees(specified), "AddSec28to44DA": 0, "DedSec28to44DAOTDedSec35AD": 0, "DedUs35ADSubSec5Dtls": [], "DeductionUs35AD": 0, "PLFrmSpecifiedBus": _to_rupees(specified), "ProfitLossSpecifiedBusiness": _to_rupees(specified)},
+        "SpecBusinessInc": {"NetPLFrmSpecBus": _to_rupees(spec_signed), "AdditionUs28to44DA": _to_rupees(amount("speculative_additions")), "DeductUs28to44DA": _to_rupees(amount("speculative_deductions")), "AdjustedPLFrmSpecuBus": _to_rupees(spec_signed)},
+        "SpecifiedBusinessInc": {"NetPLFrmSpecifiedBus": _to_rupees(specified_signed), "AddSec28to44DA": _to_rupees(amount("specified_business_additions")), "DedSec28to44DAOTDedSec35AD": _to_rupees(amount("specified_business_deductions")), "DedUs35ADSubSec5Dtls": [], "DeductionUs35AD": 0, "PLFrmSpecifiedBus": _to_rupees(specified_signed), "ProfitLossSpecifiedBusiness": _to_rupees(specified_signed)},
     }
 
 
