@@ -84,7 +84,29 @@ _ESR_SECTION_KEYS = (
 )
 
 
-def _normalize_esr_source(esr_source: Mapping) -> dict[str, Any] | None:
+# CBDT's own official ITR-3 Validation Rules for AY 2026-27 (`Reference
+# Docs by CBDT & ITD/Official Validations/CBDT_e-filing_ITR-3_Validation
+# Rules_V1.0_AY 26-27 (1).pdf`, rule #354, quoted verbatim): "If 'New Tax
+# Regime' is selected, then in schedule ESR at column 3 [AmtUs35Allowable],
+# amount cannot be more than zero for section 35(1)(ii), 35(1)(iia),
+# 35(1)(iii), 35(2AA) and 35(CCC)." These five sub-clauses are all
+# third-party contribution/donation-style research funding (payments to an
+# approved research association/university/college, a National Laboratory,
+# or an agricultural-extension-project sponsor) -- the same category of
+# deduction the new regime (s.115BAC) generally disallows, the same
+# principle already familiar from 80G/80C elsewhere in this codebase. The
+# remaining 4 sub-clauses -- 35(1)(i)/35(1)(iv) (the taxpayer's own
+# revenue/capital scientific-research expenditure) and 35(2AB)/35CCD
+# (in-house R&D / skill-development, the taxpayer's own direct business
+# expenditure, not a third-party contribution) -- are NOT in this
+# new-regime disallow list and remain 100% allowable under either regime.
+_ESR_NEW_REGIME_DISALLOWED_SECTIONS = frozenset({
+    "Section35_1_ii", "Section35_1_iia", "Section35_1_iii",
+    "Section35_2AA", "Section35_CCC",
+})
+
+
+def _normalize_esr_source(esr_source: Mapping, is_new_regime: bool) -> dict[str, Any] | None:
     """Default every Schedule ESR section/leaf a taxpayer left genuinely
     untouched to 0, matching the official schema's own per-field
     ``default: 0`` -- without this, a return using only some of the 9
@@ -115,10 +137,53 @@ def _normalize_esr_source(esr_source: Mapping) -> dict[str, Any] | None:
             continue
         raw_section = deduction_us35.get(key) if isinstance(deduction_us35, Mapping) else None
         raw_detail = raw_section.get("DeductUs35") if isinstance(raw_section, Mapping) else None
+        amt_deb_pl = _decimal_value(raw_detail.get("AmtDebPL")) if isinstance(raw_detail, Mapping) else Decimal("0")
+        # Every one of Schedule ESR's 9 section-35 sub-clauses allows
+        # 100% of the amount debited to P&L as of AY 2026-27 under the OLD
+        # regime -- the weighted (150%/200%) deductions historically
+        # available under 35(1)(ii)/(iia)/(iii)/35(2AA)/35(2AB)/35CCC/
+        # 35CCD were all phased down to a flat 100% by Finance Act 2020
+        # (effective AY 2021-22), with no subsequent reversal; 35(1)(i)/
+        # (iv) never carried a weighted multiplier at all. Under the NEW
+        # regime, 5 of the 9 sub-clauses are instead disallowed entirely
+        # (see `_ESR_NEW_REGIME_DISALLOWED_SECTIONS`'s own citation of
+        # official rule #354). The frontend's own AmtUs35Allowable/
+        # ExcessAmtOverDebPL fields are marked `readonly` in its editor
+        # (esrFields(), implying "auto-computed") but nothing -- neither
+        # the frontend's own recompute() (confirmed by reading it in
+        # full: it only derives TotUs35, never a per-section Allowable/
+        # Excess, and is entirely regime-unaware) nor, before this fix,
+        # the backend -- ever actually computed them, so they are
+        # genuinely absent for every real taxpayer interaction. This
+        # function's general "default an absent field to 0" policy would
+        # be WRONG here specifically for the old-regime/allowed case: it
+        # would silently disclose a Rs.0 allowable deduction against
+        # real, entered R&D expenditure. Default to the correct,
+        # regime-aware figure instead, only when genuinely absent -- an
+        # explicitly-provided value is still honored as-is (even one that
+        # would violate rule #354 -- this push does not add new
+        # validators, see the tracker's own ground rules).
+        if is_new_regime and key in _ESR_NEW_REGIME_DISALLOWED_SECTIONS:
+            allowable_default = Decimal("0")
+        else:
+            allowable_default = amt_deb_pl
+        raw_allowable = raw_detail.get("AmtUs35Allowable") if isinstance(raw_detail, Mapping) else None
+        amt_us35_allowable = _decimal_value(raw_allowable, default=allowable_default)
+        raw_excess = raw_detail.get("ExcessAmtOverDebPL") if isinstance(raw_detail, Mapping) else None
+        # Sl.No.4 = Sl.No.3 - Sl.No.2 per official rule #352 -- floored at
+        # 0 per the schema's own `minimum: 0` on this field; a genuine
+        # shortfall (allowable < debited, e.g. a new-regime-disallowed
+        # section) is a disallowed EXPENSE, not a negative "excess" --
+        # official rule #286 routes that shortfall into Schedule BP's own
+        # item 24(e) instead (added back into taxable business income by
+        # `_esr_shortfall_addback()`/`_business_income()` below, not left
+        # at this schedule's own disclosure layer).
+        excess_default = max(Decimal("0"), amt_us35_allowable - amt_deb_pl)
+        excess_amt_over_deb_pl = _decimal_value(raw_excess, default=excess_default)
         detail = {
-            "AmtDebPL": _decimal_value(raw_detail.get("AmtDebPL")) if isinstance(raw_detail, Mapping) else Decimal("0"),
-            "AmtUs35Allowable": _decimal_value(raw_detail.get("AmtUs35Allowable")) if isinstance(raw_detail, Mapping) else Decimal("0"),
-            "ExcessAmtOverDebPL": _decimal_value(raw_detail.get("ExcessAmtOverDebPL")) if isinstance(raw_detail, Mapping) else Decimal("0"),
+            "AmtDebPL": amt_deb_pl,
+            "AmtUs35Allowable": amt_us35_allowable,
+            "ExcessAmtOverDebPL": excess_amt_over_deb_pl,
         }
         sections[key] = {"DeductUs35": detail}
         for leaf in totals:
@@ -127,6 +192,43 @@ def _normalize_esr_source(esr_source: Mapping) -> dict[str, Any] | None:
         return None
     sections["TotUs35"] = {"DeductUs35": totals}
     return {"DeductionUs35": sections}
+
+
+def _esr_shortfall_addback(schedule_esr: "ScheduleESR | None") -> Decimal:
+    """
+    Schedule BP item 24(e) -- official CBDT ITR-3 Validation Rules for AY
+    2026-27, rule #286 (quoted verbatim): "Schedule BP, sl no 24(e) should
+    be minimum of Absolute value of total of negative values of 'col 3 -
+    col 2' of all fields in Schedule ESR."
+
+    Column 3 (AmtUs35Allowable) can be LESS than column 2 (AmtDebPL) --
+    most commonly a new-regime return with real expenditure debited under
+    one of the 5 sections rule #354 disallows (see
+    `_ESR_NEW_REGIME_DISALLOWED_SECTIONS`) -- meaning the expenditure was
+    already debited to (and reduced) the P&L account's own net profit
+    figure, but is not actually an allowable deduction. That shortfall
+    must be added BACK into taxable business income via item 24
+    (`AnyOthIncNotInclInExpDisallowPL`) or `total_business_income` would
+    silently understate real tax by the full disallowed amount -- this is
+    not merely a disclosure gap, it is the direct tax-computation
+    consequence of the new-regime disallowance itself.
+
+    Additive with (not a replacement for) whatever the taxpayer separately
+    entered into the raw Schedule-BP workspace's own item 24 field --
+    unlike item 28 (which the official form ties EXCLUSIVELY to Schedule
+    ESR's own total, see `_business_income`'s own comment), item 24 is a
+    broad "any other expense not allowable" bucket ESR's shortfall is
+    only ever one possible contributor to.
+    """
+    if schedule_esr is None:
+        return Decimal("0")
+    shortfall = Decimal("0")
+    for key in _ESR_SECTION_KEYS:
+        if key == "TotUs35":
+            continue
+        detail = getattr(schedule_esr.DeductionUs35, key).DeductUs35
+        shortfall += max(Decimal("0"), detail.AmtDebPL - detail.AmtUs35Allowable)
+    return shortfall
 
 
 def _core_schedule(draft: ReturnDraft, name: str) -> dict[str, Any] | None:
@@ -833,8 +935,16 @@ def _business_income(draft: ReturnDraft, schedule_esr: "ScheduleESR | None" = No
         icds_increase=_decimal_value(regular.get("IncProfDecLossAccICDSAdj")),
         icds_decrease=_decimal_value(regular.get("DecProfIncLossAccICDSAdj")),
         # Item 24 / item 31 -- other income not included / other amount
-        # allowable as deduction.
-        other_additions=_decimal_value(regular.get("AnyOthIncNotInclInExpDisallowPL")),
+        # allowable as deduction. Item 24 additionally folds in item
+        # 24(e) -- any Schedule ESR shortfall (AmtDebPL exceeding what's
+        # actually allowable, e.g. a new-regime-disallowed section, see
+        # `_esr_shortfall_addback`'s own citation of official rule #286)
+        # -- additive with, not a replacement for, the taxpayer's own
+        # separately-entered item 24 figure.
+        other_additions=(
+            _decimal_value(regular.get("AnyOthIncNotInclInExpDisallowPL"))
+            + _esr_shortfall_addback(schedule_esr)
+        ),
         other_deductions=_decimal_value(regular.get("AnyOthAmtAllDeduct")),
         # Items 3a-3g -- income credited to P&L belonging to another head.
         reallocation_income_salary=_decimal_value(income_heads.get("Salary")),
@@ -919,7 +1029,10 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
     tpsa_source = draft.itr3BusinessWorkspace.scheduleTPSA or draft.itr3BusinessWorkspace.core.get("ScheduleTPSA") or draft.itr3BusinessWorkspace.auxiliary.get("ScheduleTPSA")
     gst_source = draft.itr3BusinessWorkspace.scheduleGST or draft.itr3BusinessWorkspace.core.get("ScheduleGST")
     schedule_icds = ScheduleICDS.model_validate(icds_source) if isinstance(icds_source, Mapping) else None
-    _esr_normalized = _normalize_esr_source(esr_source) if isinstance(esr_source, Mapping) else None
+    _esr_normalized = (
+        _normalize_esr_source(esr_source, is_new_regime=values["tax_regime"] == "new")
+        if isinstance(esr_source, Mapping) else None
+    )
     schedule_esr = ScheduleESR.model_validate(_esr_normalized) if _esr_normalized is not None else None
     schedule_tpsa = ITR3ScheduleTPSA.model_validate(tpsa_source) if isinstance(tpsa_source, Mapping) else None
     schedule_gst = ScheduleGST.model_validate(gst_source) if isinstance(gst_source, Mapping) else None

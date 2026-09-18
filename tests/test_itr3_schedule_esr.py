@@ -39,6 +39,37 @@ authoritative for item 28 WHENEVER Schedule ESR data exists, falling back
 to the raw Schedule-BP-entered value otherwise -- so a taxpayer's own
 itemized ESR breakdown can never silently disagree with what Schedule BP
 disclosed and what was actually taxed.
+
+**A third, independent bug found on re-verification ("recheck if Schedule
+19 is implemented end-to-end")**: the frontend's own ``AmtUs35Allowable``/
+``ExcessAmtOverDebPL`` fields are marked ``readonly`` in its editor
+(implying "auto-computed") but nothing computes them anywhere -- not the
+frontend's own ``recompute()`` (confirmed by reading it in full), not the
+mapper before this fix. Defaulting an absent field to 0 (this codebase's
+general policy for genuinely-untouched fields elsewhere) would be WRONG
+here: it would silently disclose a Rs.0 allowable deduction against real,
+entered R&D expenditure. Verified against the actual current law (all 9
+section-35 sub-clauses' historical 150%/200% weighted deductions were
+phased down to a flat 100% by Finance Act 2020, effective AY 2021-22, with
+no subsequent reversal) that the correct default is 100% of AmtDebPL --
+*except* under the NEW tax regime, where CBDT's own official ITR-3
+Validation Rules for AY 2026-27 (rule #354, quoted verbatim in the
+mapper's own code comment) disallow 5 of the 9 sections entirely (the
+third-party research-contribution ones: 35(1)(ii)/(iia)/(iii), 35(2AA),
+35CCC). A first attempt at this regime check used ``str(values["tax_regime"])
+== "new"`` -- genuinely wrong (Python's Enum ``__str__`` returns
+``"TaxRegime.NEW"``, not ``"new"``, so this always evaluated False and
+silently defeated the whole regime check) -- caught by the dedicated
+new-regime test below actually exercising the path, not just by
+inspection; fixed to a direct value comparison. A fourth bug, found while
+tracing the tax-computation consequence of the regime disallowance
+through to its end: when a new-regime section is disallowed (allowable <
+debited), the shortfall is a disallowed EXPENSE that must be added BACK
+into taxable business income (official rule #286: Schedule BP item
+24(e)) -- without this, the already-debited-to-P&L expenditure would
+silently escape tax entirely under the new regime. Wired via
+``_esr_shortfall_addback()``, additive with (not replacing) the
+taxpayer's own separately-entered item 24 figure.
 """
 
 from __future__ import annotations
@@ -156,8 +187,141 @@ def test_esr_absent_from_workspace_stays_none() -> None:
 
 
 def test_esr_normalize_source_returns_none_for_empty_mapping() -> None:
-    assert _normalize_esr_source({}) is None
-    assert _normalize_esr_source({"DeductionUs35": {}}) is None
+    assert _normalize_esr_source({}, is_new_regime=False) is None
+    assert _normalize_esr_source({"DeductionUs35": {}}, is_new_regime=False) is None
+
+
+def test_esr_new_regime_disallows_five_third_party_contribution_sections() -> None:
+    """Official CBDT ITR-3 Validation Rules for AY 2026-27, rule #354
+    (quoted verbatim in the mapper's own comment): under the new regime,
+    column 3 (AmtUs35Allowable) cannot exceed zero for 35(1)(ii)/(iia)/
+    (iii), 35(2AA), and 35CCC -- third-party research-contribution
+    sections the new regime disallows, same principle as 80G/80C. The
+    other 4 sections (the taxpayer's own direct R&D/skill-development
+    expenditure) remain 100% allowable under either regime."""
+    draft = _minimal_draft()  # _minimal_draft() uses the NEW regime.
+    draft.itr3BusinessWorkspace.auxiliary["ScheduleESR"] = {
+        "DeductionUs35": {
+            # Disallowed under the new regime -- AmtUs35Allowable must
+            # come out as 0 despite real expenditure being debited.
+            "Section35_1_ii": {"DeductUs35": {"AmtDebPL": 100000}},
+            "Section35_2AA": {"DeductUs35": {"AmtDebPL": 50000}},
+            # NOT in the disallowed list -- stays 100% allowable even
+            # under the new regime.
+            "Section35_1_i": {"DeductUs35": {"AmtDebPL": 200000}},
+            "Section35_2AB": {"DeductUs35": {"AmtDebPL": 80000}},
+        }
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    esr = typed_input.schedule_esr
+    assert esr is not None
+    assert esr.DeductionUs35.Section35_1_ii.DeductUs35.AmtDebPL == Decimal("100000")
+    assert esr.DeductionUs35.Section35_1_ii.DeductUs35.AmtUs35Allowable == Decimal("0")
+    assert esr.DeductionUs35.Section35_2AA.DeductUs35.AmtUs35Allowable == Decimal("0")
+    assert esr.DeductionUs35.Section35_1_i.DeductUs35.AmtUs35Allowable == Decimal("200000")
+    assert esr.DeductionUs35.Section35_2AB.DeductUs35.AmtUs35Allowable == Decimal("80000")
+    # Total allowable = 200000 + 80000 only (the two disallowed sections
+    # contribute 0, not their AmtDebPL).
+    assert esr.DeductionUs35.TotUs35.DeductUs35.AmtUs35Allowable == Decimal("280000")
+
+
+def test_esr_new_regime_shortfall_added_back_into_business_income() -> None:
+    """The disallowed new-regime expenditure (already debited to P&L,
+    reducing net profit) must be added BACK into taxable business income
+    via item 24(e) -- official rule #286 -- or it would silently escape
+    tax entirely. Additive with the taxpayer's own separately-entered
+    item 24 figure, not a replacement."""
+    draft = _minimal_draft()  # new regime
+    draft.itr3BusinessWorkspace.core["ITR3ScheduleBP"] = {
+        "BusinessIncOthThanSpec": {
+            "ProfBfrTaxPL": 500000,
+            # An unrelated, real item-24 entry that must be preserved
+            # alongside the ESR-derived addback, not overwritten by it.
+            "AnyOthIncNotInclInExpDisallowPL": 10000,
+        }
+    }
+    draft.itr3BusinessWorkspace.auxiliary["ScheduleESR"] = {
+        "DeductionUs35": {
+            "Section35_1_ii": {"DeductUs35": {"AmtDebPL": 100000}},  # disallowed -> 100000 shortfall
+            "Section35_1_i": {"DeductUs35": {"AmtDebPL": 40000}},   # allowed -> 0 shortfall
+        }
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    # 10000 (taxpayer's own entry) + 100000 (ESR shortfall) + 0 (allowed section).
+    assert typed_input.business_income.other_additions == Decimal("110000")
+
+
+def test_esr_old_regime_no_shortfall_addback() -> None:
+    """Under the old regime, every section is 100% allowable, so there is
+    never a shortfall to add back -- item 24 must equal only whatever the
+    taxpayer separately entered."""
+    from app.schemas.return_draft import create_empty_draft, Presumptive44AD
+
+    draft = create_empty_draft("2026-27", "ITR-3", "old")
+    draft.personal.pan = "ABCDE1234F"
+    draft.personal.firstName = "Ravi"
+    draft.personal.surnameOrOrgName = "Kumar"
+    draft.personal.dateOfBirth = "1980-01-01"
+    draft.personal.flatNo = "1"
+    draft.personal.localityOrArea = "Central"
+    draft.personal.city = "Delhi"
+    draft.personal.stateCode = "07"
+    draft.personal.countryCode = "91"
+    draft.personal.pinCode = "110001"
+    draft.personal.mobile = "9876543210"
+    draft.personal.email = "ravi@example.com"
+    draft.verification.place = "Delhi"
+    draft.verification.date = "2026-07-31"
+    draft.verification.declarationAccepted = True
+    draft.businesses = [
+        Presumptive44AD(id="b1", natureCode="01001", digitalReceipts=Decimal("1000000"), declaredIncome=Decimal("60000")),
+    ]
+    draft.itr3BusinessWorkspace.core["ITR3ScheduleBP"] = {
+        "BusinessIncOthThanSpec": {"AnyOthIncNotInclInExpDisallowPL": 5000}
+    }
+    draft.itr3BusinessWorkspace.auxiliary["ScheduleESR"] = {
+        "DeductionUs35": {"Section35_1_ii": {"DeductUs35": {"AmtDebPL": 100000}}}
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    assert typed_input.business_income.other_additions == Decimal("5000")
+
+
+def test_esr_old_regime_allows_all_nine_sections_at_100_percent() -> None:
+    """Same five sections that are disallowed under the new regime (see
+    test above) must reach 100% allowable under the OLD regime -- the
+    new-regime restriction must not leak into old-regime returns."""
+    from app.schemas.return_draft import create_empty_draft, Presumptive44AD
+
+    draft = create_empty_draft("2026-27", "ITR-3", "old")
+    draft.personal.pan = "ABCDE1234F"
+    draft.personal.firstName = "Ravi"
+    draft.personal.surnameOrOrgName = "Kumar"
+    draft.personal.dateOfBirth = "1980-01-01"
+    draft.personal.flatNo = "1"
+    draft.personal.localityOrArea = "Central"
+    draft.personal.city = "Delhi"
+    draft.personal.stateCode = "07"
+    draft.personal.countryCode = "91"
+    draft.personal.pinCode = "110001"
+    draft.personal.mobile = "9876543210"
+    draft.personal.email = "ravi@example.com"
+    draft.verification.place = "Delhi"
+    draft.verification.date = "2026-07-31"
+    draft.verification.declarationAccepted = True
+    draft.businesses = [
+        Presumptive44AD(id="b1", natureCode="01001", digitalReceipts=Decimal("1000000"), declaredIncome=Decimal("60000")),
+    ]
+    draft.itr3BusinessWorkspace.auxiliary["ScheduleESR"] = {
+        "DeductionUs35": {
+            "Section35_1_ii": {"DeductUs35": {"AmtDebPL": 100000}},
+            "Section35_CCC": {"DeductUs35": {"AmtDebPL": 30000}},
+        }
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    esr = typed_input.schedule_esr
+    assert esr is not None
+    assert esr.DeductionUs35.Section35_1_ii.DeductUs35.AmtUs35Allowable == Decimal("100000")
+    assert esr.DeductionUs35.Section35_CCC.DeductUs35.AmtUs35Allowable == Decimal("30000")
 
 
 def test_business_income_derives_section35_excess_deduction_from_esr_total() -> None:
