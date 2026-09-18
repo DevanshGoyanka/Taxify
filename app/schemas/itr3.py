@@ -63,98 +63,166 @@ class PresumptiveScheme(str, Enum):
     S44AE = "44AE"
 
 
-class OIAmountGroup(BaseModel):
-    """Typed monetary children used by ITR-3 PARTA_OI disclosures."""
-    StkInsurPrem: Decimal = Decimal("0")
-    EmpHealthInsurPrem: Decimal = Decimal("0")
-    EmpBonusCommSum: Decimal = Decimal("0")
-    IntOnBorrCap: Decimal = Decimal("0")
-    ZeroCoupBondDisc: Decimal = Decimal("0")
-    RecogPFContribAmt: Decimal = Decimal("0")
-    AppSuperAnnFundAmt: Decimal = Decimal("0")
-    PensionSchemeSec80CCD: Decimal = Decimal("0")
-    AppGratFundAmt: Decimal = Decimal("0")
-    OthFundAmt: Decimal = Decimal("0")
-    EmpContributionCredits: Decimal = Decimal("0")
-    BadDebtDoubtAmt: Decimal = Decimal("0")
-    BadDebtDoubtProvn: Decimal = Decimal("0")
-    SpecResrvTranfr: Decimal = Decimal("0")
-    FamPlanPromoExp: Decimal = Decimal("0")
-    SecuritiesPaidAmt: Decimal = Decimal("0")
-    MrktLossOthExpLossICDS: Decimal = Decimal("0")
-    OthDisallowances: Decimal = Decimal("0")
-    TotAmtDisallUs36: Decimal = Decimal("0")
-    CapitalNatureExp: Decimal = Decimal("0")
-    PersonalExp: Decimal = Decimal("0")
-    BusOrProfessnExp: Decimal = Decimal("0")
-    PoliticPartyExp: Decimal = Decimal("0")
-    LawVoilatPenalExp: Decimal = Decimal("0")
-    OthPenalFineExp: Decimal = Decimal("0")
-    OffenceExp: Decimal = Decimal("0")
-    ContigentLiability: Decimal = Decimal("0")
-    OthAmtNotAllowUs37: Decimal = Decimal("0")
-    TotAmtDisallUs37: Decimal = Decimal("0")
-    NonCompChapXVIIBAmt: Decimal = Decimal("0")
-    NonComp40aiiChapXVIIBAmt: Decimal = Decimal("0")
-    NonComp40aibChapXVIIBAmt: Decimal = Decimal("0")
-    NonComp40aiiiChapXVIIBAmt: Decimal = Decimal("0")
-    TaxAmtOnProfits: Decimal = Decimal("0")
-    WTAmt: Decimal = Decimal("0")
-    RolyatyOrServiceFee: Decimal = Decimal("0")
-    IntSalBonPartner: Decimal = Decimal("0")
-    OthDisallow: Decimal = Decimal("0")
-    TotAmtDisallUs40: Decimal = Decimal("0")
-    AmtDisallUs40PyNowAll: Decimal = Decimal("0")
-    AmtPaidUs40A2b: Decimal = Decimal("0")
-    AmtGT20kCash: Decimal = Decimal("0")
-    ProvPmtGrat: Decimal = Decimal("0")
-    ContToSetupTrust: Decimal = Decimal("0")
-    TotAmtDisallUs40A: Decimal = Decimal("0")
-    AmtUs43B: Decimal = Decimal("0")
+class AmtDisallUs36Group(BaseModel):
+    """Typed PARTA_OI section-36 disallowance group (form item 6)."""
+    StkInsurPrem: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    EmpHealthInsurPrem: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    EmpBonusCommSum: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    IntOnBorrCap: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    ZeroCoupBondDisc: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    RecogPFContribAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    AppSuperAnnFundAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    PensionSchemeSec80CCD: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    AppGratFundAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    OthFundAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    EmpContributionCredits: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    BadDebtDoubtAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    BadDebtDoubtProvn: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    SpecResrvTranfr: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    FamPlanPromoExp: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    SecuritiesPaidAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    MrktLossOthExpLossICDS: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    OthDisallowances: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    TotAmtDisallUs36: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    model_config = ConfigDict(extra="forbid")
+
+
+class AmtDisallUs37Group(BaseModel):
+    """Typed PARTA_OI section-37 disallowance group (form item 7)."""
+    CapitalNatureExp: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    PersonalExp: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    BusOrProfessnExp: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    PoliticPartyExp: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    LawVoilatPenalExp: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    OthPenalFineExp: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    OffenceExp: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    ContigentLiability: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    OthAmtNotAllowUs37: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    TotAmtDisallUs37: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    model_config = ConfigDict(extra="forbid")
+
+
+class AmtDisallUs40Group(BaseModel):
+    """Typed PARTA_OI section-40 disallowance group (form item 8)."""
+    NonCompChapXVIIBAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    NonComp40aiiChapXVIIBAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    NonComp40aibChapXVIIBAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    NonComp40aiiiChapXVIIBAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    TaxAmtOnProfits: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    WTAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    RolyatyOrServiceFee: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    IntSalBonPartner: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    OthDisallow: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    TotAmtDisallUs40: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    AmtDisallUs40PyNowAll: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    model_config = ConfigDict(extra="forbid")
+
+
+class AmtDisallUs40AGroup(BaseModel):
+    """Typed PARTA_OI section-40A disallowance group (form item 9)."""
+    AmtPaidUs40A2b: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    AmtGT20kCash: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    ProvPmtGrat: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    ContToSetupTrust: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    OthDisallow: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    TotAmtDisallUs40A: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    model_config = ConfigDict(extra="forbid")
+
+
+class OIAmtUs43B(BaseModel):
+    """Typed PARTA_OI section-43B amount breakdown, nested under both the
+    'allowable this year' (form item 10) and 'disallowable this year' (form
+    item 11) wrapper blocks, which the official schema gives an identical
+    shape."""
+    TaxDutyCesAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    ContToEmpPFSFGF: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    EmpBonusComm: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    IntPayaleToFI: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    SumPayaleLoanBrToFinComp: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    IntPayaleToFISchBank: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    LeaveEncashPayable: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    RailwayAssetsPayable: Optional[Decimal] = Field(default=None, ge=0, le=99999999999999)
+    MSEPayable: Optional[Decimal] = Field(default=None, ge=0, le=99999999999999)
+    TotAmtUs43b: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    model_config = ConfigDict(extra="forbid")
+
+
+class OIAmt43BGroup(BaseModel):
+    """Typed PARTA_OI section-43B wrapper (form items 10 and 11)."""
+    AmtUs43B: OIAmtUs43B = Field(default_factory=OIAmtUs43B)
+    model_config = ConfigDict(extra="forbid")
+
+
+class OIExciseCustomsVATOutstanding(BaseModel):
+    """Typed PARTA_OI outstanding excise/customs/VAT credit breakdown (form item 12)."""
+    UnionExciseDuty: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    ServiceTax: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    VATorSaleTax: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    Cess: Optional[Decimal] = Field(default=None, ge=0, le=99999999999999)
+    CentralGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    StateGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    IntegratedGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    UnionTerrGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    OthDutyTaxCess: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    TotExciseCustomsVAT: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    model_config = ConfigDict(extra="forbid")
+
+
+class OIExciseCustomsVATOutstandingGroup(BaseModel):
+    """Typed PARTA_OI wrapper for outstanding excise/customs/VAT credits."""
+    ExciseCustomsVAT: OIExciseCustomsVATOutstanding = Field(default_factory=OIExciseCustomsVATOutstanding)
+    model_config = ConfigDict(extra="forbid")
 
 
 class OIStockValuation(BaseModel):
-    """Typed PARTA_OI closing-stock valuation method."""
-    ValRawMaterial: str = "1"
-    ValFinishedGoods: str = "1"
-    ChngStockValMetFlg: str = "N"
-    EffectOnPL: Decimal = Decimal("0")
-    DecProOrIncLossUs145_A: Decimal = Decimal("0")
+    """Typed PARTA_OI closing-stock valuation method (form item 4)."""
+    ValRawMaterial: Literal["1", "2", "3"] = "1"
+    ValFinishedGoods: Literal["1", "2", "3"] = "1"
+    ChngStockValMetFlg: Literal["N", "Y"] = "N"
+    EffectOnPL: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    DecProOrIncLossUs145_A: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    model_config = ConfigDict(extra="forbid")
 
 
 class OINoCredit(BaseModel):
-    """Typed PARTA_OI credits not routed through profit and loss."""
-    Section28Items: Decimal = Decimal("0")
-    ProformaCreditsDue: Decimal = Decimal("0")
-    PrevYrEscalClaim: Decimal = Decimal("0")
-    OthItemInc: Decimal = Decimal("0")
-    CapReceipt: Decimal = Decimal("0")
-    TotNoCredToPLAmt: Decimal = Decimal("0")
+    """Typed PARTA_OI credits not routed through profit and loss (form item 5)."""
+    Section28Items: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    ProformaCreditsDue: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    PrevYrEscalClaim: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    OthItemInc: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    CapReceipt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    TotNoCredToPLAmt: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    model_config = ConfigDict(extra="forbid")
 
 
 class ITR3PartAOI(BaseModel):
     """Complete typed ITR-3 PARTA_OI schedule."""
-    MethodOfAcct: str = "MERC"
-    ChangeInAcctMethFlg: str = "N"
-    ProfDeviatDueAcctMeth: Decimal = Decimal("0")
-    DecProOrIncLossUs145_2: Decimal = Decimal("0")
+    MethodOfAcct: Literal["MERC", "CASH"] = "MERC"
+    ChangeInAcctMethFlg: Literal["N", "Y"] = "N"
+    # No official minimum on these two: the form's own item 3a/3b/15 text
+    # ("increase in profit OR decrease in loss") admits either sign.
+    ProfDeviatDueAcctMeth: Decimal = Field(default=Decimal("0"), le=99999999999999)
+    DecProOrIncLossUs145_2: Decimal = Field(default=Decimal("0"), le=99999999999999)
     MethodOfValClgStk: OIStockValuation = Field(default_factory=OIStockValuation)
     NoCredToPLAmt: OINoCredit = Field(default_factory=OINoCredit)
-    AmtDisallUs36: OIAmountGroup = Field(default_factory=OIAmountGroup)
-    AmtDisallUs37: OIAmountGroup = Field(default_factory=OIAmountGroup)
-    AmtDisallUs40: OIAmountGroup = Field(default_factory=OIAmountGroup)
-    AmtDisallUs40A: OIAmountGroup = Field(default_factory=OIAmountGroup)
-    AmtDisallUs43BPyNowAll: OIAmountGroup = Field(default_factory=OIAmountGroup)
-    AmtDisall43B: OIAmountGroup = Field(default_factory=OIAmountGroup)
-    AmtExciseCustomsVATOutstanding: OIAmountGroup = Field(default_factory=OIAmountGroup)
-    DeemedProfUs33ABs: Decimal = Decimal("0")
-    DeemedProfUs33AB: Decimal = Decimal("0")
-    DeemedProfUs33ABA: Decimal = Decimal("0")
-    ProfTaxAmtUs41: Decimal = Decimal("0")
-    PriorAmtIncCrDrPL: Decimal = Decimal("0")
-    AmountOfExpDisAllwUs14A: Decimal = Decimal("0")
-    InterestDisAllowUs23SMEAct: Decimal = Decimal("0")
-    ScheduleTPSAFlg: str = "N"
+    AmtDisallUs36: AmtDisallUs36Group = Field(default_factory=AmtDisallUs36Group)
+    AmtDisallUs37: AmtDisallUs37Group = Field(default_factory=AmtDisallUs37Group)
+    AmtDisallUs40: AmtDisallUs40Group = Field(default_factory=AmtDisallUs40Group)
+    AmtDisallUs40A: AmtDisallUs40AGroup = Field(default_factory=AmtDisallUs40AGroup)
+    AmtDisallUs43BPyNowAll: OIAmt43BGroup = Field(default_factory=OIAmt43BGroup)
+    AmtDisall43B: OIAmt43BGroup = Field(default_factory=OIAmt43BGroup)
+    AmtExciseCustomsVATOutstanding: OIExciseCustomsVATOutstandingGroup = Field(default_factory=OIExciseCustomsVATOutstandingGroup)
+    DeemedProfUs33ABs: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    DeemedProfUs33AB: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    DeemedProfUs33ABA: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    ProfTaxAmtUs41: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    # No official minimum: prior-period income/expenditure "credited or
+    # debited (net)" to the P&L can be a genuine negative figure.
+    PriorAmtIncCrDrPL: Decimal = Field(default=Decimal("0"), le=99999999999999)
+    AmountOfExpDisAllwUs14A: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    InterestDisAllowUs23SMEAct: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+    ScheduleTPSAFlg: Literal["N", "Y"] = "N"
+    model_config = ConfigDict(extra="forbid")
 
 
 class ITR3ScheduleTPSATaxPayment(BaseModel):
