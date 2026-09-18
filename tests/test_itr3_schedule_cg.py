@@ -388,3 +388,98 @@ def test_schedule_cg_typed_none_raises_clear_value_error_not_name_error() -> Non
 
     with pytest.raises(ValueError, match="requires typed ITR3Input"):
         _schedule_cg_for23_typed(None, None)
+
+
+# ---------------------------------------------------------------------------
+# Land/building SaleofLandBuildDtls row shape (severe, pre-existing defect
+# found during a "very very sure" re-verification of Schedule 20 -- unlike
+# every other Schedule CG bug this schedule's history has fixed, this one
+# is a hard SCHEMA-VALIDATION failure, not a tax-rate or disclosure gap.
+# The codebase previously reused ITR-2's own land/building row builder
+# unchanged for ITR-3 (`_cg_land_building_row_stcg`/`_ltcg` in
+# `itd/itr2.py`), whose field names/shapes were verified correct for
+# ITR-2's OWN schema but never independently checked against ITR-3's --
+# confirmed by direct introspection that the two forms' schemas genuinely
+# differ here (ITR-3's wider 54B/54G/54GA vs ITR-2's single 54B on the
+# STCG side), meaning EVERY ITR-3 return with a land/building capital
+# gain -- one of the most common real-world scenarios -- produced
+# schema-invalid JSON (`Additional properties are not allowed`,
+# missing required `ExemptionOrDednUs54`/`CapgainonAssets`/
+# `CapgainonAssets_1ea`) regardless of anything else this schedule's
+# history already fixed or tested.
+# ---------------------------------------------------------------------------
+
+from datetime import date as _date
+from app.schemas.itr2 import CGTransaction, CGAssetType
+
+
+def test_land_building_stcg_row_uses_itr3_field_names_and_validates() -> None:
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING, full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("500000"),
+        date_of_acquisition=_date(2025, 6, 1), date_of_transfer=_date(2025, 12, 1), deduction_us54b=Decimal("100000"),
+    )]
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    cg = document["ITR"]["ITR3"]["ScheduleCGFor23"]
+    row = cg["ShortTermCapGainFor23"]["SaleofLandBuild"]["SaleofLandBuildDtls"][0]
+    # ITR-3's own field names (not ITR-2's DeductionUs54B/STCGonImmvblPrprty).
+    assert "ExemptionOrDednUs54" in row
+    assert "CapgainonAssets" in row
+    assert "DeductionUs54B" not in row
+    assert "STCGonImmvblPrprty" not in row
+    assert row["ExemptionOrDednUs54"]["ExemptionGrandTotal"] == 100000
+    assert row["CapgainonAssets"] == 1400000  # 1500000 - 100000
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_land_building_ltcg_row_uses_itr3_field_names_and_validates() -> None:
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING, full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("500000"),
+        date_of_acquisition=_date(2020, 1, 1), date_of_transfer=_date(2026, 1, 1), deduction_us54=Decimal("100000"),
+    )]
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    cg = document["ITR"]["ITR3"]["ScheduleCGFor23"]
+    row = cg["LongTermCapGain23"]["SaleofLandBuild"]["SaleofLandBuildDtls"][0]
+    # ITR-3's own field names (not ITR-2's LTCGonImmvblPrprty/...BE).
+    assert "CapgainonAssets" in row
+    assert "LTCGonImmvblPrprty" not in row
+    assert "LTCGonImmvblPrprtyBE" not in row
+    assert row["ExemptionOrDednUs54"]["ExemptionGrandTotal"] == 100000
+    assert row["CapgainonAssets"] == 1400000  # 1500000 - 100000
+    # Acquired before the 23-Jul-2024 cutoff -> second-proviso EiB track present.
+    assert "CapgainonAssets_1ea" in row
+    assert "TaxSec1121a" in row
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_land_building_54d_54g_54ga_reach_table_d_detail_rows() -> None:
+    """Direct completion of the item-10 fix (54D/54G/54GA schema fields):
+    the amounts were wired into the actual tax computation, but the Table
+    D per-claim disclosure detail rows for these three sections were
+    missing from the builder entirely -- confirmed against the official
+    schema, which genuinely has DeducClaimDtlsUs54D/54G/54GA fields."""
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [
+        CGTransaction(
+            asset_type=CGAssetType.LAND_BUILDING, full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("500000"),
+            date_of_acquisition=_date(2020, 1, 1), date_of_transfer=_date(2026, 1, 1), deduction_us54d=Decimal("300000"),
+        ),
+        CGTransaction(
+            asset_type=CGAssetType.LAND_BUILDING, full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("500000"),
+            date_of_acquisition=_date(2025, 6, 1), date_of_transfer=_date(2025, 12, 1), deduction_us54g=Decimal("200000"), deduction_us54ga=Decimal("100000"),
+        ),
+    ]
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    cg = document["ITR"]["ITR3"]["ScheduleCGFor23"]
+    info = cg["DeducClaimInfo"]
+    assert info["DeducClaimDtlsUs54D"] == [{"DateofAcquisition": "2020-01-01", "AmtDeducted": 300000}]
+    assert info["DeducClaimDtlsUs54G"] == [{"DateofTransfer": "2025-12-01", "AmtDeducted": 200000}]
+    assert info["DeducClaimDtlsUs54GA"] == [{"DateofTransfer": "2025-12-01", "AmtDeducted": 100000}]
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
+    assert not errors, "\n".join(e.message for e in errors)

@@ -25,7 +25,7 @@ from typing import Any, Optional
 from app.engine.calculators.itr3 import ITR3Result
 from app.schemas.itr3 import ITR3Input
 from app.engine.common.hra import compute_hra_exemption
-from app.engine.schedules.capital_gains import _exemption_claim_total
+from app.engine.schedules.capital_gains import _exemption_claim_total, deemed_consideration_50c, _indexed_cost
 from app.engine.itd.common import (
     _to_rupees,
     _to_rupees_rounded10,
@@ -51,9 +51,8 @@ from app.engine.itd.itr2 import (
     _schedule_tcs as _itr2_schedule_tcs,
     _schedule_amt as _itr2_schedule_amt,
     _schedule_amtc as _itr2_schedule_amtc,
-    _cg_land_building_row_stcg as _itr2_cg_land_building_row_stcg,
-    _cg_land_building_row_ltcg as _itr2_cg_land_building_row_ltcg,
     _deduction_claim_detail_rows as _itr2_deduction_claim_detail_rows,
+    _exemption_or_dedn_us54_block as _itr2_exemption_or_dedn_us54_block,
     _nri_proviso_48 as _itr2_nri_proviso_48,
     _nri_foreign_asset as _itr2_nri_foreign_asset,
 )
@@ -1991,6 +1990,156 @@ def _cg_dtaa_rows(entries: list) -> list[dict[str, Any]]:
     ]
 
 
+_ITR3_LAND_BUILDING_STCG_SECCODES = ("54B", "54G", "54GA")
+_ITR3_LAND_BUILDING_LTCG_SECCODES = ("54", "54B", "54D", "54EC", "54F", "54G", "54GA")
+
+
+def _cg_land_building_row_stcg(asset: Any) -> dict[str, Any]:
+    """Build one ITR-3 Schedule CG STCG SaleofLandBuildDtls row.
+
+    ITR-3's own schema shape for this row DIFFERS from ITR-2's -- confirmed
+    by direct introspection of both forms' schemas, not assumed identical
+    despite the two forms sharing almost everything else about Schedule
+    CG. ITR-3's item A1d allows THREE exemption sections (54B/54G/54GA,
+    vs ITR-2's single 54B), so the field is a nested ``ExemptionOrDednUs54
+    {ExemptionOrDednUs54Dtls, ExemptionGrandTotal}`` object here, not
+    ITR-2's flat ``DeductionUs54B`` scalar; the balance field is named
+    ``CapgainonAssets`` here, not ITR-2's ``STCGonImmvblPrprty``.
+    Previously this codebase called ITR-2's own row builder unchanged for
+    ITR-3 too, which silently produced schema-invalid JSON (``Additional
+    properties are not allowed``, missing required ``ExemptionOrDednUs54``
+    /``CapgainonAssets``) for EVERY ITR-3 return with a land/building STCG
+    transaction -- one of the most common real-world Schedule CG
+    scenarios. Found and fixed during the Schedule 20 re-verification,
+    unrelated to anything else fixed this session.
+    """
+    stamp_value = getattr(asset, "stamp_duty_value", Decimal("0")) or Decimal("0")
+    deemed = deemed_consideration_50c(asset.full_consideration, stamp_value)
+    exemption_total = getattr(asset, "exemption_total", Decimal("0"))
+    return {
+        "DateofPurchase": asset.date_of_acquisition or "",
+        "DateofSale": asset.date_of_transfer,
+        "FullConsideration": _to_rupees(asset.full_consideration),
+        "PropertyValuation": _to_rupees(stamp_value),
+        "FullConsideration50C": _to_rupees(deemed),
+        "AquisitCost": _to_rupees(asset.acquisition_cost),
+        "ImproveCost": _to_rupees(asset.improvement_cost),
+        "ExpOnTrans": _to_rupees(asset.expenditure_on_transfer),
+        "TotalDedn": _to_rupees(asset.total_deductions),
+        "Balance": _to_rupees(asset.balance),
+        "ExemptionOrDednUs54": _itr2_exemption_or_dedn_us54_block(getattr(asset, "exemptions", None), _ITR3_LAND_BUILDING_STCG_SECCODES),
+        "CapgainonAssets": _to_rupees(asset.balance - exemption_total),
+    }
+
+
+def _cg_land_building_row_ltcg(asset: Any) -> dict[str, Any]:
+    """Build one ITR-3 Schedule CG LTCG SaleofLandBuildDtls row.
+
+    Same field-naming mismatch as the STCG row above (``CapgainonAssets``/
+    ``CapgainonAssets_1ea`` here, not ITR-2's ``LTCGonImmvblPrprty``/
+    ``LTCGonImmvblPrprtyBE``) -- ``ExemptionOrDednUs54``/``TaxSec1121a``/
+    ``TaxSec1121aiiB``/``ExcessAmtSec1121a``/``TotalDednForEiB``/
+    ``BalanceForEiB`` DO happen to share ITR-2's exact field names
+    (confirmed directly against both schemas, not assumed), so only the
+    two ``CapgainonAssets*`` fields needed correcting here -- and
+    ``ExemptionOrDednUs54``'s own valid section-code set is wider here
+    too (54/54B/54D/54EC/54F/54G/54GA vs ITR-2's 54/54B/54EC/54F).
+    """
+    stamp_value = getattr(asset, "stamp_duty_value", Decimal("0")) or Decimal("0")
+    deemed = deemed_consideration_50c(asset.full_consideration, stamp_value)
+    exemption_total = getattr(asset, "exemption_total", Decimal("0"))
+    row: dict[str, Any] = {
+        "DateofPurchase": asset.date_of_acquisition or "",
+        "DateofSale": asset.date_of_transfer,
+        "FullConsideration": _to_rupees(asset.full_consideration),
+        "PropertyValuation": _to_rupees(stamp_value),
+        "FullConsideration50C": _to_rupees(deemed),
+        "AquisitCost": _to_rupees(asset.acquisition_cost),
+        "AquisitCostIndex": _to_rupees(asset.indexed_acquisition_cost),
+        "CostOfImprovements": {
+            "CostOfImprovementsDtls": (
+                [{
+                    "slno": 1,
+                    "ImproveCost": _to_rupees(asset.improvement_cost),
+                    "ImproveDate": asset.year_of_improvement,
+                    "CostOfImpIndex": _to_rupees(asset.indexed_improvement_cost),
+                }]
+                if asset.improvement_cost > 0 and asset.year_of_improvement
+                else []
+            ),
+            "TotalImprovecost": _to_rupees(asset.improvement_cost),
+            "TotalindexImprovecost": _to_rupees(asset.indexed_improvement_cost),
+        },
+        "ExpOnTrans": _to_rupees(asset.expenditure_on_transfer),
+        "TotalDedn": _to_rupees(asset.total_deductions),
+        "Balance": _to_rupees(asset.balance),
+        "ExemptionOrDednUs54": _itr2_exemption_or_dedn_us54_block(getattr(asset, "exemptions", None), _ITR3_LAND_BUILDING_LTCG_SECCODES),
+        "CapgainonAssets": _to_rupees(asset.balance - exemption_total),
+    }
+    if getattr(asset, "eib_applicable", False):
+        # Same real-CII fallback as compute_ltcg() -- an unpopulated
+        # indexed cost must never be treated as equal to the un-indexed
+        # cost; that would silently zero the second-proviso relief this
+        # exact block discloses.
+        indexed_acquisition = asset.indexed_acquisition_cost or _indexed_cost(
+            asset.acquisition_cost, asset.date_of_acquisition, asset.date_of_transfer
+        )
+        indexed_improvement = asset.indexed_improvement_cost or (
+            _indexed_cost(asset.improvement_cost, asset.year_of_improvement or asset.date_of_acquisition, asset.date_of_transfer)
+            if asset.improvement_cost > 0 else Decimal("0")
+        )
+        total_dedn_for_eib = indexed_acquisition + indexed_improvement + asset.expenditure_on_transfer
+        row["TotalDednForEiB"] = _to_rupees(total_dedn_for_eib)
+        row["BalanceForEiB"] = _to_rupees(asset.balance_for_eib)
+        # "1ea = 1ca - 1d" per the form's own text -- same exemption total
+        # ("1d") subtracted from both the primary and EiB tracks.
+        row["CapgainonAssets_1ea"] = _to_rupees(
+            max(Decimal("0"), asset.balance_for_eib - exemption_total)
+        )
+        row["TaxSec1121a"] = _to_rupees(asset.tax_sec_112_1a)
+        row["TaxSec1121aiiB"] = _to_rupees(asset.tax_sec_112_1a_iib)
+        row["ExcessAmtSec1121a"] = _to_rupees(asset.excess_amt_sec_112_1a)
+    return row
+
+
+def _land_building_54dga_rows(transactions: list, field_name: str, use_acquisition_date: bool) -> list[dict[str, Any]]:
+    """Build ``DeducClaimDtlsUs54D``/``Us54G``/``Us54GA`` rows (Schedule CG
+    item D) from each land/building transaction's own legacy scalar claim.
+
+    Unlike sections 54/54B/54EC/54F (handled by the shared
+    ``_deduction_claim_detail_rows()``, sourced from the CANONICAL,
+    CGAS-evidence-tracked ``CGTransaction.exemptions`` claim list), 54D/
+    54G/54GA cannot be represented there at all -- ``CapitalGainExemption
+    Claim.section`` is a ``Literal["54","54B","54EC","54F","115F"]`` that
+    structurally excludes them. These three sections only ever exist as
+    ``CGTransaction.deduction_us54d``/``_us54g``/``_us54ga`` bare legacy
+    scalars (cross-form issue #10, tracker) -- no date-of-investment/CGAS-
+    deposit-evidence sub-fields exist for them anywhere in this codebase.
+    Only the two officially REQUIRED fields per row (``DateofAcquisition``+
+    ``AmtDeducted`` for 54D; ``DateofTransfer``+``AmtDeducted`` for 54G/
+    54GA, confirmed by direct schema introspection) are populated --
+    honest about what data actually exists, not fabricating the richer
+    CGAS-evidence fields the official schema also allows but this
+    codebase has no source for.
+    """
+    rows: list[dict[str, Any]] = []
+    for tx in transactions or []:
+        amount = getattr(tx, field_name, None) or Decimal("0")
+        if amount <= 0:
+            continue
+        if use_acquisition_date:
+            acquired = getattr(tx, "date_of_acquisition", None)
+            if acquired is None:
+                continue
+            rows.append({"DateofAcquisition": acquired.isoformat(), "AmtDeducted": _to_rupees(amount)})
+        else:
+            transferred = getattr(tx, "date_of_transfer", None)
+            if transferred is None:
+                continue
+            rows.append({"DateofTransfer": transferred.isoformat(), "AmtDeducted": _to_rupees(amount)})
+    return rows
+
+
 # Schedule CG items A7 (STCG)/B10 (LTCG) -- the official schema restricts
 # the prior-year-deposit table's own year/section enums, and they DIFFER
 # between the two tables (confirmed by direct introspection of both
@@ -2064,8 +2213,8 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
     zero = Decimal("0")
     stcg_assets = list(getattr(stcg, "land_building", []) or [])
     ltcg_assets = list(getattr(ltcg, "land_building", []) or [])
-    stcg_rows = [_itr2_cg_land_building_row_stcg(asset) for asset in stcg_assets]
-    ltcg_rows = [_itr2_cg_land_building_row_ltcg(asset) for asset in ltcg_assets]
+    stcg_rows = [_cg_land_building_row_stcg(asset) for asset in stcg_assets]
+    ltcg_rows = [_cg_land_building_row_ltcg(asset) for asset in ltcg_assets]
     total_stcg = getattr(stcg, "total_stcg", zero)
     total_ltcg = getattr(ltcg, "total_ltcg", zero)
     total_cg = getattr(cg_result, "total_capital_gains", zero)
@@ -2324,7 +2473,8 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
     # figure, not per-transaction).
     cg_exemptions = getattr(cg_result, "exemptions", None)
     tot_deduct_claim = getattr(cg_exemptions, "total_exemption", zero) if cg_exemptions else zero
-    return {"ShortTermCapGainFor23": stcg_block, "LongTermCapGain23": ltcg_block, "DeducClaimInfo": {"DeducClaimDtlsUs115F": [], "DeducClaimDtlsUs54": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54"), "DeducClaimDtlsUs54B": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54B"), "DeducClaimDtlsUs54EC": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54EC"), "DeducClaimDtlsUs54F": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54F"), "TotDeductClaim": _to_rupees(tot_deduct_claim)}, "CurrYrLosses": current_loss_rows, "IncmFromVDATrnsf": _to_rupees(vda_income), "AccruOrRecOfCG": {"ShortTermUnder20Per": _date_range_from_values(buckets["stcg20"]), "ShortTermUnder30Per": _date_range_from_values(buckets["stcg30"]), "ShortTermUnderAppRate": _date_range_from_values(buckets["stcg_app"]), "ShortTermUnderDTAARate": {"DateRange": _DR_RANGE}, "LongTermUnder12_5Per": _date_range_from_values(buckets["ltcg125"]), "LongTermUnderDTAARate": {"DateRange": _DR_RANGE}, "VDATrnsfGainsUnder30Per": _date_range_from_values(buckets["vda"])}, "SumOfCGIncm": _to_rupees(total_cg), "TotScheduleCGFor23": _to_rupees(total_cg)}
+    all_cg_transactions = typed_input.cg_transactions or []
+    return {"ShortTermCapGainFor23": stcg_block, "LongTermCapGain23": ltcg_block, "DeducClaimInfo": {"DeducClaimDtlsUs115F": [], "DeducClaimDtlsUs54": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54"), "DeducClaimDtlsUs54B": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54B"), "DeducClaimDtlsUs54D": _land_building_54dga_rows(all_cg_transactions, "deduction_us54d", use_acquisition_date=True), "DeducClaimDtlsUs54EC": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54EC"), "DeducClaimDtlsUs54F": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54F"), "DeducClaimDtlsUs54G": _land_building_54dga_rows(all_cg_transactions, "deduction_us54g", use_acquisition_date=False), "DeducClaimDtlsUs54GA": _land_building_54dga_rows(all_cg_transactions, "deduction_us54ga", use_acquisition_date=False), "TotDeductClaim": _to_rupees(tot_deduct_claim)}, "CurrYrLosses": current_loss_rows, "IncmFromVDATrnsf": _to_rupees(vda_income), "AccruOrRecOfCG": {"ShortTermUnder20Per": _date_range_from_values(buckets["stcg20"]), "ShortTermUnder30Per": _date_range_from_values(buckets["stcg30"]), "ShortTermUnderAppRate": _date_range_from_values(buckets["stcg_app"]), "ShortTermUnderDTAARate": {"DateRange": _DR_RANGE}, "LongTermUnder12_5Per": _date_range_from_values(buckets["ltcg125"]), "LongTermUnderDTAARate": {"DateRange": _DR_RANGE}, "VDATrnsfGainsUnder30Per": _date_range_from_values(buckets["vda"])}, "SumOfCGIncm": _to_rupees(total_cg), "TotScheduleCGFor23": _to_rupees(total_cg)}
 
 
 def _schedule_ei(typed_input: ITR3Input | None) -> dict[str, Any] | None:
