@@ -149,12 +149,53 @@ def test_parta_qd_mapping_is_schema_valid() -> None:
 
 
 def test_parta_qd_rejects_unknown_unit_code() -> None:
-    """Typed QD input rejects values outside the official enum once validated by schema."""
-    typed = ITR3Input(
-        age_bracket="below_60", tax_regime="new",
-        parta_qd=ITR3PartAQD(TradingConcern=[ITR3TradingQDRow(
+    """Typed QD input rejects an unofficial unit code at construction time --
+    UnitOfMeasure is now a Literal of the exact official 23-value enum, so
+    this fails closed immediately rather than only being caught later by
+    schema validation."""
+    with pytest.raises(Exception):
+        ITR3TradingQDRow(
             ItemName="Rice", UnitOfMeasure="000", OpeningStock=1,
             PurchaseQty=2, SaleQty=3, ClgStock=0, AnyShortExces=0,
+        )
+
+
+def test_parta_qd_manufacturing_concern_requires_both_raw_material_and_finished_product() -> None:
+    """Schedule 10 fix: the official schema requires ManfactrConcern to carry
+    BOTH RawMaterial and FinishrByProd whenever it is present at all -- a
+    return with only one side's rows previously reached the JSON missing the
+    other required key entirely, failing official schema validation."""
+    from app.schemas.itr3 import ITR3RawMaterialQDRow, ITR3FinishedProductQDRow
+
+    raw_only = ITR3Input(
+        age_bracket="below_60", tax_regime="new",
+        parta_qd=ITR3PartAQD(RawMaterial=[ITR3RawMaterialQDRow(
+            ItemName="Steel", UnitOfMeasure="102", OpeningStock=10, PurchaseQty=5,
+            SaleQty=0, ClgStock=12, AnyShortExces=0,
         )]),
     )
-    assert list(_parta_qd_validator().iter_errors(_parta_qd(typed)))
+    with pytest.raises(ValueError, match="FinishrByProd"):
+        _parta_qd(raw_only)
+
+    finished_only = ITR3Input(
+        age_bracket="below_60", tax_regime="new",
+        parta_qd=ITR3PartAQD(FinishrByProd=[ITR3FinishedProductQDRow(
+            ItemName="Bolts", UnitOfMeasure="107", OpeningStock=100, PurchaseQty=0,
+            SaleQty=50, ClgStock=50, AnyShortExces=0,
+        )]),
+    )
+    with pytest.raises(ValueError, match="RawMaterial"):
+        _parta_qd(finished_only)
+
+    both = ITR3Input(
+        age_bracket="below_60", tax_regime="new",
+        parta_qd=ITR3PartAQD(
+            RawMaterial=[ITR3RawMaterialQDRow(ItemName="Steel", UnitOfMeasure="102", OpeningStock=10, PurchaseQty=5, SaleQty=0, ClgStock=12, AnyShortExces=0)],
+            FinishrByProd=[ITR3FinishedProductQDRow(ItemName="Bolts", UnitOfMeasure="107", OpeningStock=100, PurchaseQty=0, SaleQty=50, ClgStock=50, AnyShortExces=0)],
+        ),
+    )
+    payload = _parta_qd(both)
+    assert "RawMaterial" in payload["ManfactrConcern"]
+    assert "FinishrByProd" in payload["ManfactrConcern"]
+    errors = list(_parta_qd_validator().iter_errors(payload))
+    assert errors == []

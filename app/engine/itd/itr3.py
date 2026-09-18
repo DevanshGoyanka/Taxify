@@ -966,20 +966,30 @@ def _parta_oi(typed_input: ITR3Input | None = None) -> dict:
 
 
 def _parta_qd(typed_input: ITR3Input | None = None) -> dict:
-    """Build PARTA_QD with the official TradingConcern/ManfactrConcern nesting."""
+    """Build PARTA_QD with the official TradingConcern/ManfactrConcern nesting.
+
+    The official schema requires both RawMaterial and FinishrByProd whenever
+    ManfactrConcern is present at all -- there is no such thing as a
+    manufacturing concern disclosure with only raw-material or only
+    finished-product rows. Fail closed rather than silently drop the
+    taxpayer's real data or omit the whole (mandatory-if-44AB) schedule.
+    """
     if typed_input is None or typed_input.parta_qd is None:
         return {}
     source = typed_input.parta_qd
     result: dict[str, Any] = {}
     if source.TradingConcern:
         result["TradingConcern"] = {"QuantitDet": _official_integer_tree([r.model_dump(exclude_none=True) for r in source.TradingConcern])}
-    if source.RawMaterial or source.FinishrByProd:
-        manufacturing: dict[str, Any] = {}
-        if source.RawMaterial:
-            manufacturing["RawMaterial"] = {"QuantitDet": _official_integer_tree([r.model_dump(exclude_none=True) for r in source.RawMaterial])}
-        if source.FinishrByProd:
-            manufacturing["FinishrByProd"] = {"QuantitDet": _official_integer_tree([r.model_dump(exclude_none=True) for r in source.FinishrByProd])}
-        result["ManfactrConcern"] = manufacturing
+    if bool(source.RawMaterial) != bool(source.FinishrByProd):
+        missing = "FinishrByProd" if source.RawMaterial else "RawMaterial"
+        raise ValueError(
+            f"PARTA_QD ManfactrConcern requires both RawMaterial and FinishrByProd rows when either is present; {missing} is missing."
+        )
+    if source.RawMaterial and source.FinishrByProd:
+        result["ManfactrConcern"] = {
+            "RawMaterial": {"QuantitDet": _official_integer_tree([r.model_dump(exclude_none=True) for r in source.RawMaterial])},
+            "FinishrByProd": {"QuantitDet": _official_integer_tree([r.model_dump(exclude_none=True) for r in source.FinishrByProd])},
+        }
     return result
 
 

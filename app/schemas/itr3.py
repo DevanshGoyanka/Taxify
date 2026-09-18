@@ -249,41 +249,51 @@ class ITR3ScheduleTPSA(BaseModel):
     TotalAmountDeposited: Decimal = Decimal("0")
 
 
+_QD_UNIT_OF_MEASURE = Literal[
+    "101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "111",
+    "112", "113", "114", "115", "116", "117", "118", "119", "120", "121", "122", "999",
+]
+
+
 class ITR3TradingQDRow(BaseModel):
-    """Typed PARTA_QD trading-inventory row."""
-    ItemName: str
-    UnitOfMeasure: str
-    OpeningStock: Decimal
-    PurchaseQty: Decimal
-    SaleQty: Decimal
-    ClgStock: Decimal
+    """Typed PARTA_QD trading-inventory row (form items 1-5)."""
+    ItemName: str = Field(min_length=1, max_length=25)
+    UnitOfMeasure: _QD_UNIT_OF_MEASURE
+    OpeningStock: Decimal = Field(ge=0, le=99999999999999)
+    PurchaseQty: Decimal = Field(ge=0, le=99999999999999)
+    SaleQty: Decimal = Field(ge=0, le=99999999999999)
+    ClgStock: Decimal = Field(ge=0, le=99999999999999)
+    # No official bound: shortage (negative) or excess (positive) is a signed figure.
     AnyShortExces: Decimal
+    model_config = ConfigDict(extra="forbid")
 
 
 class ITR3RawMaterialQDRow(BaseModel):
-    """Typed PARTA_QD raw-material inventory row."""
-    ItemName: str
-    UnitOfMeasure: str
-    OpeningStock: Decimal
-    PurchaseQty: Decimal
-    PrevYrConsum: Decimal
-    SaleQty: Decimal
-    ClgStock: Decimal
-    yldFinisProd: Decimal
-    PercentYld: Decimal
+    """Typed PARTA_QD raw-material inventory row (form item 6)."""
+    ItemName: str = Field(min_length=1, max_length=25)
+    UnitOfMeasure: _QD_UNIT_OF_MEASURE
+    OpeningStock: Decimal = Field(ge=0, le=99999999999999)
+    PurchaseQty: Decimal = Field(ge=0, le=99999999999999)
+    PrevYrConsum: Optional[Decimal] = Field(default=None, ge=0, le=99999999999999)
+    SaleQty: Decimal = Field(ge=0, le=99999999999999)
+    ClgStock: Decimal = Field(ge=0, le=99999999999999)
+    yldFinisProd: Optional[Decimal] = Field(default=None, ge=0, le=99999999999999)
+    PercentYld: Optional[Decimal] = Field(default=None, ge=0, le=100)
     AnyShortExces: Decimal
+    model_config = ConfigDict(extra="forbid")
 
 
 class ITR3FinishedProductQDRow(BaseModel):
-    """Typed PARTA_QD finished-product inventory row."""
-    ItemName: str
-    UnitOfMeasure: str
-    OpeningStock: Decimal
-    PurchaseQty: Decimal
-    PrevyrManfact: Decimal
-    SaleQty: Decimal
-    ClgStock: Decimal
+    """Typed PARTA_QD finished-product/by-product inventory row (form item 7)."""
+    ItemName: str = Field(min_length=1, max_length=25)
+    UnitOfMeasure: _QD_UNIT_OF_MEASURE
+    OpeningStock: Decimal = Field(ge=0, le=99999999999999)
+    PurchaseQty: Decimal = Field(ge=0, le=99999999999999)
+    PrevyrManfact: Optional[Decimal] = Field(default=None, ge=0, le=99999999999999)
+    SaleQty: Decimal = Field(ge=0, le=99999999999999)
+    ClgStock: Decimal = Field(ge=0, le=99999999999999)
     AnyShortExces: Decimal
+    model_config = ConfigDict(extra="forbid")
 
 
 class ITR3PartAQD(BaseModel):

@@ -38,9 +38,34 @@ export function readItr3PartAQD(workspace: ITR3BusinessWorkspace): ITR3PartAQDWo
 /** Updates one PARTA_QD scalar immutably; structural paths and unknown fields are rejected. */
 export function updateItr3PartAQD(workspace: ITR3BusinessWorkspace, branch: 'TradingConcern' | 'RawMaterial' | 'FinishrByProd', index: number, field: keyof ITR3PartAQDRow, value: unknown): ITR3BusinessWorkspace {
   if (!Number.isInteger(index) || index < 0 || !['ItemName','UnitOfMeasure','OpeningStock','PurchaseQty','SaleQty','ClgStock','AnyShortExces','PrevYrConsum','yldFinisProd','PercentYld','PrevyrManfact'].includes(field)) return workspace;
-  const current = readItr3PartAQD(workspace); const list = branch === 'TradingConcern' ? current.TradingConcern ?? [] : branch === 'RawMaterial' ? current.ManfactrConcern?.RawMaterial ?? [] : current.ManfactrConcern?.FinishrByProd ?? [];
+  const current = readItr3PartAQD(workspace); const list = branchRows(current, branch);
   if (index >= list.length) return workspace;
   const nextRows = list.map((item, rowIndex) => rowIndex === index ? { ...item, [field]: field === 'ItemName' ? String(value ?? '') : field === 'UnitOfMeasure' ? (UNITS.has(String(value)) ? String(value) : '') : nonNegative(value) } : item);
-  const next: ITR3PartAQDWorkspace = { ...current, ...(branch === 'TradingConcern' ? { TradingConcern: nextRows } : { ManfactrConcern: { ...(current.ManfactrConcern ?? {}), ...(branch === 'RawMaterial' ? { RawMaterial: nextRows } : { FinishrByProd: nextRows }) } }) };
+  return writeBranchRows(workspace, current, branch, nextRows);
+}
+
+const EMPTY_QD_ROW: ITR3PartAQDRow = { ItemName: '', UnitOfMeasure: '', OpeningStock: 0, PurchaseQty: 0, SaleQty: 0, ClgStock: 0, AnyShortExces: 0 };
+const MAX_QD_ROWS = 20;
+
+function branchRows(data: ITR3PartAQDWorkspace, branch: 'TradingConcern' | 'RawMaterial' | 'FinishrByProd'): ITR3PartAQDRow[] {
+  return branch === 'TradingConcern' ? data.TradingConcern ?? [] : branch === 'RawMaterial' ? data.ManfactrConcern?.RawMaterial ?? [] : data.ManfactrConcern?.FinishrByProd ?? [];
+}
+
+function writeBranchRows(workspace: ITR3BusinessWorkspace, current: ITR3PartAQDWorkspace, branch: 'TradingConcern' | 'RawMaterial' | 'FinishrByProd', rowsNext: ITR3PartAQDRow[]): ITR3BusinessWorkspace {
+  const next: ITR3PartAQDWorkspace = { ...current, ...(branch === 'TradingConcern' ? { TradingConcern: rowsNext } : { ManfactrConcern: { ...(current.ManfactrConcern ?? {}), ...(branch === 'RawMaterial' ? { RawMaterial: rowsNext } : { FinishrByProd: rowsNext }) } }) };
   return { ...workspace, auxiliary: { ...workspace.auxiliary, PARTA_QD: next as never } };
+}
+
+/** Appends a blank quantitative-detail row to a branch (official schema caps every QuantitDet array at 20 rows). */
+export function addItr3PartAQDRow(workspace: ITR3BusinessWorkspace, branch: 'TradingConcern' | 'RawMaterial' | 'FinishrByProd'): ITR3BusinessWorkspace {
+  const current = readItr3PartAQD(workspace); const list = branchRows(current, branch);
+  if (list.length >= MAX_QD_ROWS) return workspace;
+  return writeBranchRows(workspace, current, branch, [...list, { ...EMPTY_QD_ROW }]);
+}
+
+/** Removes one quantitative-detail row from a branch. */
+export function removeItr3PartAQDRow(workspace: ITR3BusinessWorkspace, branch: 'TradingConcern' | 'RawMaterial' | 'FinishrByProd', index: number): ITR3BusinessWorkspace {
+  const current = readItr3PartAQD(workspace); const list = branchRows(current, branch);
+  if (!Number.isInteger(index) || index < 0 || index >= list.length) return workspace;
+  return writeBranchRows(workspace, current, branch, list.filter((_, rowIndex) => rowIndex !== index));
 }
