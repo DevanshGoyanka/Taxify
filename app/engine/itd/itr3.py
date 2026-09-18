@@ -25,6 +25,7 @@ from typing import Any, Optional
 from app.engine.calculators.itr3 import ITR3Result
 from app.schemas.itr3 import ITR3Input
 from app.engine.common.hra import compute_hra_exemption
+from app.engine.schedules.capital_gains import _exemption_claim_total
 from app.engine.itd.common import (
     _to_rupees,
     _to_rupees_rounded10,
@@ -2089,7 +2090,29 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         buckets["vda"][_quarter_index(item.date_of_transfer)] += income
 
     gain_112a = getattr(ltcg, "income_112a", zero)
-    equity_112a = {"BalanceCG": _to_rupees(gain_112a), "DeductionUs54F": 0, "CapgainonAssets": _to_rupees(gain_112a)}
+    # Schedule CG item B4b -- deduction u/s 54F against 112A LTCG (form:
+    # "4a - 4b = B4c"). Ported verbatim from ITR-2's own already-working
+    # `itd/itr2.py` logic: attributable only to CGTransaction rows the
+    # calculator itself classified into the 112A basket (the explicit
+    # `cg_112a_scrips` path has no `exemptions` field at all -- a
+    # separate, narrower pre-existing limitation neither form's builder
+    # expands here), summed from each transaction's own rich `exemptions`
+    # claim list (not the legacy scalar fields, which land/building rows
+    # use instead).
+    _112a_asset_types = {"listed_equity_112a", "equity_oriented_fund_112a", "business_trust_unit_112a"}
+    ded_54f_112a = sum(
+        (
+            _exemption_claim_total(getattr(tx, "exemptions", None), frozenset({"54F"}))
+            for tx in (typed_input.cg_transactions or [])
+            if (tx.asset_type.value if hasattr(tx.asset_type, "value") else tx.asset_type) in _112a_asset_types
+        ),
+        zero,
+    )
+    equity_112a = {
+        "BalanceCG": _to_rupees(gain_112a),
+        "DeductionUs54F": _to_rupees(ded_54f_112a),
+        "CapgainonAssets": _to_rupees(gain_112a - ded_54f_112a),
+    }
 
     # Schedule CG A7/A10 disclose the capital-gain character retained by
     # pass-through income.  These values come only from explicit typed PTI
@@ -2270,7 +2293,14 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         "TotalSTCG": _to_rupees(total_stcg),
     }
     ltcg_block: dict[str, Any] = {
-        "SaleofLandBuild": {"SaleofLandBuildDtls": ltcg_rows, "TotalExcessTax": 0, "TotalLTCGImmblPrprty": _to_rupees(sum((a.balance for a in ltcg_assets), zero))},
+        # TotalExcessTax (B1h = SigmaB1eii) -- already computed per-asset by
+        # compute_ltcg() itself (the section 112(1)(a) second-proviso
+        # comparison, protecting a resident who acquired before 23-Jul-2024
+        # from a tax increase caused by the 2024 indexation-removal change)
+        # and already summed onto LTCGResult.total_excess_tax_112_1a --
+        # simply never read here before. Matches ITR-2's own already-working
+        # one-line wiring exactly (`itd/itr2.py`'s own `TotalExcessTax`).
+        "SaleofLandBuild": {"SaleofLandBuildDtls": ltcg_rows, "TotalExcessTax": _to_rupees(getattr(ltcg, "total_excess_tax_112_1a", zero) if ltcg else zero), "TotalLTCGImmblPrprty": _to_rupees(sum((a.balance for a in ltcg_assets), zero))},
         "SaleOfEquityShareUs112A": equity_112a,
         "NRIProvisoSec48": _itr2_nri_proviso_48(typed_input), "NRISaleOfEquityShareUs112A": {"BalanceCG": 0, "DeductionUs54F": 0, "CapgainonAssets": 0}, "NRISaleofForeignAsset": _itr2_nri_foreign_asset(typed_input),
         **({"NRIOnSec112and115": {"NRIOnSec112and115Dtls": nri_112_115_rows}} if nri_112_115_rows else {}),

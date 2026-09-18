@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from app.schemas.itr1 import AgeBracket, HousePropertyIncome, PropertyType, TaxRegime
+from app.schemas.itr2 import ResidentialStatus
 from app.schemas.itr3 import ITR3Input
 from app.engine.common.rounding import round_to_nearest_10
 from app.engine.common.slab_tax import compute as compute_slab_tax
@@ -46,13 +47,15 @@ from app.engine.schedules.business import compute as compute_pgbp
 from app.engine.schedules.capital_gains import (
     compute_stcg, compute_ltcg, compute_vda,
     compute_exemptions, aggregate as aggregate_cg,
+    post_loss_cg_baskets,
     STCGResult, LTCGResult, CG112AAsset, VDAEntry, CGAsset,
     _is_short_term, other_asset_gain,
     ITR3_OTHER_ASSETS_ST_EXEMPTION_SECTIONS,
     ITR3_OTHER_ASSETS_LT_EXEMPTION_SECTIONS,
 )
 from app.engine.schedules.special_rates import (
-    compute_112a as si_112a, compute_111a as si_111a,
+    compute_112a_taxable as si_112a_taxable, compute_111a as si_111a,
+    compute_112 as si_112, compute_dtaa_stcg, compute_dtaa_ltcg,
     compute_vda as si_vda, compute_lottery, compute_115bbe, compute_115bbf,
     aggregate as aggregate_si,
 )
@@ -156,6 +159,11 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     regime = input_data.tax_regime
     age = input_data.age_bracket
     z = Decimal("0")
+    # Section 112(1)(a) second-proviso eligibility (land/building LTCG
+    # comparison, capital_gains.py::compute_ltcg()) -- NOR is a species of
+    # "resident" under section 6 (only a non-resident is excluded), same
+    # gate ITR-2's own calculator uses (calculators/itr2.py).
+    is_resident_or_nor = input_data.residential_status != ResidentialStatus.NON_RESIDENT
 
     # ── 1. Business Income (PGBP) ───────────────────────────────────────
     biz_income = z
@@ -301,7 +309,6 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     ltcg_112a_assets = []
     ltcg_land_cg = []
     ltcg_other_cg = z
-    ltcg_dtaa = z
     vda_entries_list = []
     exempt_54 = z
     exempt_54b = z
@@ -337,12 +344,28 @@ def compute(input_data: ITR3Input) -> ITR3Result:
                     total_deductions=tx.expenditure_on_transfer,
                 ))
         elif asset_type == "land_building":
+            # `date_of_acquisition`/`date_of_transfer`/`stamp_duty_value`/
+            # `year_of_improvement` were never populated here at all -- a
+            # real, separate defect: without a real acquisition date,
+            # compute_ltcg()'s own section 112(1)(a) second-proviso relief
+            # (`eib_applicable = is_resident and acquired_date is not None
+            # and ...`) could NEVER trigger for ITR-3 regardless of the
+            # `is_resident` fix above, since `_parse_date("")` always
+            # returns None; `stamp_duty_value`'s absence also silently
+            # disabled the section 50C deemed-consideration override.
+            # Mirrors ITR-2's own already-correct construction exactly
+            # (calculators/itr2.py).
             asset = CGAsset(
+                description=tx.description or "",
+                date_of_acquisition=tx.date_of_acquisition.isoformat() if tx.date_of_acquisition else "",
+                date_of_transfer=tx.date_of_transfer.isoformat() if tx.date_of_transfer else "",
                 full_consideration=tx.full_consideration,
+                stamp_duty_value=tx.stamp_duty_value or Decimal("0"),
                 acquisition_cost=tx.cost_of_acquisition,
                 indexed_acquisition_cost=tx.indexed_cost,
                 improvement_cost=tx.improvement_cost,
                 indexed_improvement_cost=tx.indexed_improvement,
+                year_of_improvement=tx.year_of_improvement or "",
                 expenditure_on_transfer=tx.expenditure_on_transfer,
             )
             if is_short:
@@ -402,15 +425,13 @@ def compute(input_data: ITR3Input) -> ITR3Result:
 
     # Section 46A capital loss on buyback of shares (Schedule CG's
     # "CapitalLossBuyBackShares" block) is a genuine loss, not merely
-    # disclosure -- it reduces the actual taxed STCG/LTCG total. ITR-3's
-    # own CYLA wiring for capital gains does not bucket-separate STCG@20%/
-    # 30%/applicable-rate the way ITR-2's does (confirmed by inspection --
-    # `cy_input` below lumps everything into `stcg_app_income`), so the
-    # 30%/applicable-rate split at the loss-input level would be lost
-    # downstream regardless; net into the two raw accumulators this
-    # calculator actually carries forward (111A-taxed vs. everything else)
-    # so the computed tax is correct even though that pre-existing
-    # bucket-precision gap is not fixed here.
+    # disclosure -- it reduces the actual taxed STCG/LTCG total. Unlike
+    # ITR-2, ITR-3 has no FII/FPI assessee concept and therefore no genuine
+    # flat-30% STCG basket at all (section 115AD(1)(ii) is FII-only) -- both
+    # `cg_buyback_loss_stcg30` and `cg_buyback_loss_stcg_applicable`
+    # correctly net into the SAME `stcg_other` accumulator, which CYLA/BFLA
+    # below route into the single "applicable rate" STCG sub-basket
+    # (`stcg_app_income`), matching ITR-2's own non-FII path exactly.
     stcg_111a_val += input_data.cg_buyback_loss_stcg20
     stcg_other += input_data.cg_buyback_loss_stcg30 + input_data.cg_buyback_loss_stcg_applicable
     ltcg_other_cg += input_data.cg_buyback_loss_ltcg
@@ -435,7 +456,57 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     stcg_result = compute_stcg(stcg_111a=stcg_111a_val, stcg_land_building=stcg_land_cg,
                                 stcg_other=stcg_other)
     ltcg_result = compute_ltcg(ltcg_112a_assets=ltcg_112a_assets, ltcg_land_building=ltcg_land_cg,
-                                ltcg_other=ltcg_other_cg, ltcg_dtaa=ltcg_dtaa)
+                                ltcg_other=ltcg_other_cg, is_resident=is_resident_or_nor)
+
+    # NRI proviso-48 (Schedule CG A3/B4/B7 -- non-resident, not an FII,
+    # sale under first proviso to section 48, and section 115F) and
+    # DTAA-rate capital gains (A9/B12) -- ported verbatim from ITR-2's own
+    # already-working calculator (calculators/itr2.py), since both forms
+    # share the identical Schedule CG A3/B4/B7/A9/B12 arithmetic. These
+    # ITR3Input fields were added earlier this session for Schedule CG
+    # disclosure but were only ever read by the ITD builder for the raw
+    # bare-figure rows -- never merged into stcg_result/ltcg_result here,
+    # so they were correctly disclosed but had ZERO tax effect.
+    stcg_dtaa_not_chargeable = sum(
+        (e.amount for e in (input_data.cg_stcg_dtaa_entries or []) if not e.chargeable_in_india), z,
+    )
+    stcg_dtaa_special = sum(
+        (e.amount for e in (input_data.cg_stcg_dtaa_entries or []) if e.chargeable_in_india), z,
+    )
+    ltcg_dtaa_not_chargeable = sum(
+        (e.amount for e in (input_data.cg_ltcg_dtaa_entries or []) if not e.chargeable_in_india), z,
+    )
+    ltcg_dtaa_special = sum(
+        (e.amount for e in (input_data.cg_ltcg_dtaa_entries or []) if e.chargeable_in_india), z,
+    )
+    nri_ltcg_proviso48 = max(z,
+        input_data.cg_nri_ltcg_without_indexation - input_data.cg_nri_ltcg_deduction_54f)  # B4c
+    # B7 (115F) is taxed at 12.5% under section 115E -- numerically the
+    # same rate as ordinary non-112A LTCG post-Budget-2024, so folded into
+    # income_125per_other for tax correctness (same scoping decision
+    # ITR-2's calculator already makes, and the same documented deferral:
+    # no distinct section-115E Schedule SI row, just correctly taxed).
+    nri_ltcg_115f = max(z,
+        input_data.cg_nri_115f_sale_value - input_data.cg_nri_115f_deduction)  # B7c
+
+    stcg_result.income_111a += input_data.cg_nri_stcg_stt_paid  # A3a
+    stcg_result.income_30per += (
+        input_data.cg_nri_stcg_stt_not_paid  # A3b
+        - stcg_dtaa_not_chargeable - stcg_dtaa_special
+    )
+    stcg_result.income_dtaa += stcg_dtaa_special
+    stcg_result.total_stcg = (
+        stcg_result.income_111a + stcg_result.income_30per
+        + stcg_result.income_app_rate + stcg_result.income_dtaa
+    )
+    ltcg_result.income_125per_other += (
+        nri_ltcg_proviso48 + nri_ltcg_115f - ltcg_dtaa_not_chargeable - ltcg_dtaa_special
+    )
+    ltcg_result.income_dtaa += ltcg_dtaa_special
+    ltcg_result.total_ltcg = (
+        ltcg_result.income_112a + ltcg_result.income_125per_other + ltcg_result.income_dtaa
+    )
+
     vda_income = compute_vda(vda_entries=vda_entries_list)
     exemptions = compute_exemptions(exempt_54, exempt_54b, exempt_54ec, exempt_54f)
     cg_result = aggregate_cg(stcg_result, ltcg_result, vda_income, exemptions)
@@ -490,6 +561,32 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     non_spec_biz_loss_for_cyla = pgbp.part_e_loss_remaining if has_pgbp else z
     non_spec_biz_income_for_cyla = pgbp.non_spec_net_income if has_pgbp else z
     spec_biz_income_for_cyla = pgbp.part_e_speculative_income_after_setoff if has_pgbp else z
+
+    # Map CG baskets into the statutory sub-baskets CYLA/BFLA/Schedule SI
+    # need, mirroring ITR-2's own already-correct calculator exactly
+    # (calculators/itr2.py) -- ITR-3 shares the identical Schedule CG/CYLA/
+    # BFLA/SI architecture, just without a distinct FII/FPI assessee status
+    # (FII is out of scope for ITR-3 filers entirely), so there is no
+    # genuine flat-30% STCG basket here: `stcg_result.income_30per`
+    # (land/building) and `income_app_rate` both always land in the
+    # "applicable rate" (slab) STCG sub-basket. Previously EVERY CG rate
+    # bucket -- 111A @20%, ordinary LTCG @12.5% under section 112, DTAA-rate
+    # CG -- was lumped into a single generic bucket with no differentiation
+    # at all, which meant: (1) section 112 LTCG-other was never taxed at
+    # its own 12.5% special rate, only at slab rates; (2) the section
+    # 112(1)(a) second-proviso relief could never apply (is_resident was
+    # never even passed to compute_ltcg()); (3) a current-year/brought-
+    # forward loss set off against the lumped bucket never correctly
+    # reduced the special-rate 111A/112A tax, since Schedule SI entries
+    # were built from RAW pre-loss values further down this function
+    # (fixed below, ## 16).
+    stcg_111a_signed = stcg_result.income_111a
+    stcg_app_signed = stcg_result.income_30per + stcg_result.income_app_rate
+    stcg_dtaa_signed = stcg_result.income_dtaa
+    ltcg_125_signed = ltcg_result.income_125per_other
+    ltcg_112a_gross = ltcg_result.income_112a
+    ltcg_dtaa_signed = ltcg_result.income_dtaa
+
     cy_input = CYLAInput(
         hp_loss=r.house_property_income if r.house_property_income < 0 else z,
         hp_income=r.house_property_income if r.house_property_income > 0 else z,
@@ -497,12 +594,12 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         non_spec_biz_income=non_spec_biz_income_for_cyla,
         spec_biz_loss=pgbp.speculative_signed if has_pgbp and pgbp.speculative_signed < 0 else z,
         spec_biz_income=spec_biz_income_for_cyla,
-        stcg20_income=z,
+        stcg20_income=stcg_111a_signed,
         stcg30_income=z,
-        stcg_app_income=cg_result.total_capital_gains if cg_result.total_capital_gains > 0 else z,
-        stcg_dtaa_income=z,
-        ltcg125_income=z,
-        ltcg_dtaa_income=z,
+        stcg_app_income=stcg_app_signed,
+        stcg_dtaa_income=stcg_dtaa_signed,
+        ltcg125_income=ltcg_125_signed + ltcg_112a_gross,
+        ltcg_dtaa_income=ltcg_dtaa_signed,
         non_salary_income=max(z, r.salary_income) + max(z, r.other_sources_income - r.clubbing_income),
     )
     cyla = compute_cyla(cy_input)
@@ -511,10 +608,10 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     r.schedules["cyla"] = cyla
 
     # ── 10. BFLA ────────────────────────────────────────────────────────
-    # Use post-CYLA income — CYLA may have consumed income to absorb losses.
-    cg_income_for_bfla = max(z,
-        cg_result.total_capital_gains
-        - cyla.hp_setoff - cyla.non_spec_biz_setoff - cyla.spec_biz_setoff)
+    # Use each CYLA sub-basket's own post-CYLA residual directly (mirroring
+    # ITR-2's own BFLAInput construction exactly) -- NOT a single
+    # re-derived lumped figure, which previously discarded the
+    # rate-basket split CYLA had just computed.
     bf_list = [
         {
             "assessment_year": str(item.assessment_year),
@@ -529,12 +626,12 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         hp_income=r.house_property_income if r.house_property_income > 0 else z,
         non_spec_biz_income=pgbp.non_spec_net_income if has_pgbp and pgbp.non_spec_net_income > 0 else z,
         spec_biz_income=pgbp.speculative_net_income if has_pgbp and pgbp.speculative_net_income > 0 else z,
-        stcg20_income=cg_income_for_bfla,
-        stcg30_income=z,
-        stcg_app_income=z,
-        stcg_dtaa_income=z,
-        ltcg125_income=z,
-        ltcg_dtaa_income=z,
+        stcg20_income=cyla.stcg20_remaining,
+        stcg30_income=cyla.stcg30_remaining,
+        stcg_app_income=cyla.stcg_app_remaining,
+        stcg_dtaa_income=cyla.stcg_dtaa_remaining,
+        ltcg125_income=cyla.ltcg125_remaining,
+        ltcg_dtaa_income=cyla.ltcg_dtaa_remaining,
         bf_losses=bf_list,
     )
     bfla = compute_bfla(bf_input)
@@ -557,8 +654,27 @@ def compute(input_data: ITR3Input) -> ITR3Result:
                                 "loss_cf": entry.remaining_carry_forward})
     r.schedules["cfl"] = cfl_entries
 
-    # ── 11. GTI after losses ────────────────────────────────────────────
-    gti_after = gti_before - r.cyla_total_set_off - r.bfla_total_set_off
+    # ── 11. GTI after losses, and post-loss capital-gain rate baskets ───
+    gti_after = max(z, gti_before - r.cyla_total_set_off - r.bfla_total_set_off)
+    r.gti_after_loss_setoff = gti_after
+    r.gross_total_income = gti_after
+
+    # Allocate CYLA/BFLA's per-basket residuals into the post-loss
+    # 111A/112/112A/DTAA rate baskets Schedule SI needs -- shared with
+    # ITR-2 (app/engine/schedules/capital_gains.py::post_loss_cg_baskets()).
+    post_loss_cg = post_loss_cg_baskets(stcg_result, ltcg_result, cyla, bfla, cg_result.exemptions)
+    r.schedules["post_loss_cg"] = post_loss_cg
+
+    # Correct GTI/Total Income and the disclosed capital-gains total for
+    # §54/54B/54EC/54F/115F exemptions actually consumed against STCG/LTCG
+    # above ("exemption_used") -- `gti_before`/`gti_after` were computed
+    # from `stcg_result.total_stcg`/`ltcg_result.total_ltcg`, captured
+    # BEFORE `post_loss_cg_baskets()` ever applies this same netting.
+    # Mirrors ITR-2's identical correction (calculators/itr2.py).
+    _cg_bucket_keys = ("normal_stcg", "111a", "112", "112a_gross", "stcg_dtaa", "ltcg_dtaa")
+    r.capital_gains_income = sum((post_loss_cg[k] for k in _cg_bucket_keys), z) + vda_income
+    total_cg_exemption_relief = post_loss_cg.get("exemption_used", z)
+    gti_after = max(z, gti_after - total_cg_exemption_relief)
     r.gti_after_loss_setoff = gti_after
     r.gross_total_income = gti_after
 
@@ -575,11 +691,16 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         r.schedules["agri"] = ag
 
     # ── 14. Deductions (Chapter VI-A + Business deductions) ─────────────
+    # Use post-CYLA/BFLA capital-gain amounts (post_loss_cg), not the raw
+    # pre-loss stcg_result/ltcg_result figures -- mirrors ITR-2's identical
+    # fix (calculators/itr2.py, "## 10. Chapter VI-A Deductions").
+    cg_112a_taxable_for_ded = post_loss_cg["112a_taxable"]
+    cg_111a_income_for_ded = post_loss_cg["111a"]
     ded = compute_deductions(
         input_data.deductions_chapter6a, gti_after, age, regime,
         input_data.other_sources_income,
-        cg_112a_income=cg_result.ltcg.taxable_112a,
-        cg_111a_income=stcg_result.income_111a,
+        cg_112a_income=cg_112a_taxable_for_ded,
+        cg_111a_income=cg_111a_income_for_ded,
     )
     r.schedules["deductions"] = ded
     r.deductions_partb_chapter6a = ded.total
@@ -599,9 +720,63 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     r.aggregate_income = ti + r.net_agricultural_income
 
     # ── 16. Special Rate Income Tax ─────────────────────────────────────
+    # Every entry below is built from POST-loss-setoff `post_loss_cg`
+    # values, not the raw pre-CYLA/BFLA stcg_result/ltcg_result figures --
+    # otherwise a loss set off against the lumped CG bucket would never
+    # actually reduce the special-rate 111A/112A/112 tax (it would still be
+    # computed on the full, un-reduced amount) while `normal_income`'s own
+    # `max(z, ...)` clip below silently "wastes" the loss's benefit instead.
     si_entries = []
-    si_entries.append(si_112a(cg_result.ltcg.taxable_112a, pre_exempted=True))
-    si_entries.append(si_111a(stcg_result.income_111a))
+
+    # Section 112A: taxable amount drives the tax; gross amount (BFLA-
+    # sourced, "part of 3vii of Schedule BFLA" per the form's own Schedule
+    # SI table) drives the disclosed "Income" column -- see
+    # compute_112a_taxable()'s own docstring for the full citation.
+    si_entries.append(si_112a_taxable(cg_112a_taxable_for_ded, gross_112a=post_loss_cg["112a_gross"]))
+
+    # Section 111A: listed equity STCG (at 20% for AY 2026-27).
+    si_entries.append(si_111a(cg_111a_income_for_ded))
+
+    # Section 112: LTCG other than 112A, at 12.5% -- previously MISSING
+    # entirely from ITR-3's calculator (the whole gain was taxed at slab
+    # rates instead), the core bug this fix addresses.
+    other_ltcg = post_loss_cg["112"]
+    if other_ltcg > 0:
+        si_112_entry = si_112(other_ltcg)
+        # Section 112(1)(a) second-proviso relief (land/building,
+        # residents, pre-23-Jul-2024 acquisition), computed per-row in
+        # compute_ltcg() and summed onto ltcg_result.total_excess_tax_112_1a.
+        # Capped at this bucket's own actual tax so the relief can never
+        # exceed what was actually charged here -- mirrors ITR-2's
+        # identical relief application exactly (calculators/itr2.py).
+        relief = min(ltcg_result.total_excess_tax_112_1a, si_112_entry.tax_amount)
+        if relief > z:
+            si_112_entry.tax_amount -= relief
+        si_entries.append(si_112_entry)
+
+    # DTAA-rate STCG/LTCG (Schedule CG A9/B12) -- ratio-allocate the
+    # post-loss taxable DTAA basket back across each declared entry's own
+    # rate, mirroring ITR-2's identical allocation (calculators/itr2.py).
+    stcg_dtaa_taxable = post_loss_cg["stcg_dtaa"]
+    stcg_dtaa_gross = sum(
+        (e.amount for e in (input_data.cg_stcg_dtaa_entries or []) if e.chargeable_in_india), z,
+    )
+    if stcg_dtaa_taxable > z and stcg_dtaa_gross > z:
+        stcg_dtaa_ratio = min(Decimal("1"), stcg_dtaa_taxable / stcg_dtaa_gross)
+        for dtaa in input_data.cg_stcg_dtaa_entries:
+            if dtaa.chargeable_in_india:
+                si_entries.append(compute_dtaa_stcg(dtaa.amount * stcg_dtaa_ratio, dtaa.applicable_rate))
+
+    ltcg_dtaa_taxable = post_loss_cg["ltcg_dtaa"]
+    ltcg_dtaa_gross = sum(
+        (e.amount for e in (input_data.cg_ltcg_dtaa_entries or []) if e.chargeable_in_india), z,
+    )
+    if ltcg_dtaa_taxable > z and ltcg_dtaa_gross > z:
+        ltcg_dtaa_ratio = min(Decimal("1"), ltcg_dtaa_taxable / ltcg_dtaa_gross)
+        for dtaa in input_data.cg_ltcg_dtaa_entries:
+            if dtaa.chargeable_in_india:
+                si_entries.append(compute_dtaa_ltcg(dtaa.amount * ltcg_dtaa_ratio, dtaa.applicable_rate))
+
     if vda_income > 0:
         si_entries.append(si_vda(vda_income))
 

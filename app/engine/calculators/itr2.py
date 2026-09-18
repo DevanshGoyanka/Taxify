@@ -72,6 +72,7 @@ from app.engine.schedules.capital_gains import (
     compute_stcg,
     compute_vda,
     other_asset_gain,
+    post_loss_cg_baskets,
     ITR2_OTHER_ASSETS_ST_EXEMPTION_SECTIONS,
     ITR2_OTHER_ASSETS_LT_EXEMPTION_SECTIONS,
 )
@@ -366,119 +367,6 @@ def _classify_cg_transactions(
                 ltcg_other_signed += gain
 
     return ltcg_112a_assets, stcg_land, ltcg_land, stcg_111a_signed, stcg_other_signed, ltcg_other_signed
-
-
-def _consume(amount: Decimal, pools: list[Decimal]) -> tuple[Decimal, list[Decimal]]:
-    """Consume a nonnegative amount from ordered nonnegative income pools."""
-    remaining = max(_ZERO, amount)
-    updated = list(pools)
-    for index, pool in enumerate(updated):
-        used = min(remaining, max(_ZERO, pool))
-        updated[index] = max(_ZERO, pool - used)
-        remaining -= used
-    return remaining, updated
-
-
-def _post_loss_cg_baskets(
-    stcg: STCGResult,
-    ltcg: LTCGResult,
-    cyla: CYLAResult,
-    bfla: BFLAResult,
-    non_cg_income_available_for_hp: Decimal,
-    exemptions: ExemptionResult,
-) -> dict[str, Decimal]:
-    """Allocate statutory loss set-offs into capital-gain rate baskets.
-
-    Uses the per-basket residual incomes from the 6-sub-basket CYLA and BFLA
-    engines to populate the official ITR-2 Schedule CG/Part B-TI sub-baskets.
-    """
-    # Map CYLA/BFLA 6-sub-basket residuals into the 4 post-loss baskets
-    # used by the SI engine. `normal_stcg` is the "ordinary slab-rate STCG"
-    # basket (land/building + generic other-assets, form items A1/A5) --
-    # sourced from `stcg30_remaining` for an FII/FPI (whose OWN section
-    # 115AD(1)(ii) securities gain genuinely IS a flat 30%) or from
-    # `stcg_app_remaining` for every other taxpayer (see the ## 5 CYLA
-    # comment in this file for the full citation of why ordinary
-    # land/building/other-assets STCG must NOT be disclosed under Table
-    # E's "STCG@30%" row) -- exactly one of the two is ever nonzero for a
-    # single return, so summing both is safe and keeps this basket's own
-    # total unchanged regardless of which CYLA sub-bucket it came from.
-    normal_stcg = cyla.stcg30_remaining + cyla.stcg_app_remaining
-    section_111a = cyla.stcg20_remaining  # 20% 111A STCG
-    # 112A gross and 112 other LTCG are both in the ltcg125 pool;
-    # split 112A out for threshold application.
-    other_ltcg = bfla.ltcg125_remaining  # post-BFLA LTCG (includes 112A)
-    section_112a = max(_ZERO, ltcg.income_112a)  # gross 112A before losses
-
-    # Allocate CYLA/BFLA losses against 112A vs other LTCG proportionally.
-    # DTAA-rate LTCG (Phase 6i-5) is deliberately excluded from this split --
-    # it is its own separate CYLA/BFLA sub-basket (ltcg_dtaa_income/
-    # bfla.ltcg_dtaa_remaining), never blended into the ltcg125 CYLA pool
-    # (CYLAInput.ltcg125_income = ltcg_125_signed + ltcg_112a_gross only), so
-    # including it here would misattribute DTAA income as "loss absorbed"
-    # against 112A/other-LTCG whenever both DTAA and 112A income exist in
-    # the same return, understating 112A and overstating other-LTCG with no
-    # real loss involved.
-    total_ltcg_before = max(_ZERO, ltcg.income_112a) + max(_ZERO, ltcg.income_125per_other)
-    if total_ltcg_before > _ZERO:
-        ltcg_loss_absorbed = max(_ZERO, total_ltcg_before) - other_ltcg
-        # Absorb losses proportionally from 112A and other LTCG
-        ratio_112a = max(_ZERO, ltcg.income_112a) / total_ltcg_before
-        section_112a = max(_ZERO, ltcg.income_112a) - ltcg_loss_absorbed * ratio_112a
-        other_ltcg = max(_ZERO, ltcg.income_125per_other) - ltcg_loss_absorbed * (1 - ratio_112a)
-
-    # HP loss absorbed from CG (after non-CG income) — already handled in CYLA
-    # per-basket residuals, so no additional allocation needed here.
-
-    # BFLA CG losses are already consumed in the per-basket residuals.
-    # No additional allocation needed.
-
-    # Section 54B (agricultural land) is the ONLY §54-series exemption the
-    # official form allows against short-term capital gain (Schedule CG
-    # item A1d restricts the STCG-land-building deduction to 54B only) --
-    # consume it from the 30%/normal-rate STCG bucket first, which is where
-    # land/building STCG lands (`compute_stcg()` blends land gain into
-    # `income_30per`). Only the REMAINING exemption pool -- after whatever
-    # 54B actually reduced STCG -- can then reduce LTCG. Previously the
-    # entire pool, including any 54B claimed on an STCG land/building
-    # disposal, was consumed ONLY against LTCG (`[other_ltcg, section_112a]`
-    # below), so a resident's real tax liability never reflected a 54B
-    # claim whenever the return had no LTCG (or too little LTCG) to absorb
-    # it -- a direct tax overstatement, not just a disclosure gap.
-    stcg_land_54b = sum((asset.exemption_total for asset in stcg.land_building), _ZERO)
-    stcg_exemption_pool = min(max(_ZERO, stcg_land_54b), max(_ZERO, exemptions.total_exemption))
-    remaining_after_stcg, stcg_pools = _consume(stcg_exemption_pool, [normal_stcg])
-    normal_stcg = stcg_pools[0]
-    stcg_exemption_used = stcg_exemption_pool - remaining_after_stcg
-
-    # Section 54/54EC/54F/115F (LTCG-only) plus any 54B not already
-    # consumed by STCG above can reduce positive LTCG.
-    ltcg_exemption_pool = max(_ZERO, exemptions.total_exemption - stcg_exemption_used)
-    ltcg_exemption_remaining, pools = _consume(ltcg_exemption_pool, [other_ltcg, section_112a])
-    other_ltcg, section_112a = pools
-    ltcg_exemption_used = ltcg_exemption_pool - ltcg_exemption_remaining
-    return {
-        "normal_stcg": normal_stcg,
-        "111a": section_111a,
-        "112": other_ltcg,
-        "112a_gross": section_112a,
-        "112a_taxable": max(_ZERO, section_112a - LTCG_112A_EXEMPTION),
-        # DTAA-rate STCG/LTCG (Phase 6i-5) -- each its own independent CYLA/
-        # BFLA sub-basket, post-loss/post-brought-forward remaining amount
-        # (mirroring "111a"'s CYLA-level and "112"'s BFLA-level precedent
-        # respectively).
-        "stcg_dtaa": cyla.stcg_dtaa_remaining,
-        "ltcg_dtaa": bfla.ltcg_dtaa_remaining,
-        # Total §54-series exemption actually consumed against STCG+LTCG
-        # this year (NOT including the separate section 112A ₹1.25L
-        # threshold, tracked implicitly via "112a_gross" - "112a_taxable"
-        # above) -- used by compute() to correct GTI/Total Income, which
-        # was computed further up this function from the PRE-exemption
-        # gross CG totals (loss set-off must run before exemption is
-        # applied, so GTI necessarily starts from the gross figure; this
-        # is the retroactive correction for the exemption on top of it).
-        "exemption_used": stcg_exemption_used + ltcg_exemption_used,
-    }
 
 
 def compute(input_data: ITR2Input) -> ITR2Result:
@@ -1123,13 +1011,11 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     gti_after = max(_ZERO, gti_before - r.cyla_total_set_off - r.bfla_total_set_off)
     r.gti_after_loss_setoff = gti_after
     r.gross_total_income = gti_after
-    non_cg_for_hp = max(_ZERO, r.salary_income) + max(_ZERO, r.other_sources_income)
-    post_loss_cg = _post_loss_cg_baskets(
+    post_loss_cg = post_loss_cg_baskets(
         stcg_result,
         ltcg_result,
         cyla,
         bfla,
-        non_cg_for_hp,
         cg_result.exemptions,
     )
     r.schedules["post_loss_cg"] = post_loss_cg
