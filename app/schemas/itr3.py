@@ -711,13 +711,14 @@ class PLPLPartAPersumptiveInc44AD(BaseModel):
 
     The official turnover ceiling is Rs.3 crore (the extended limit when cash
     receipts stay within 5%); ``TotPersumptiveInc44AD`` is the computed 44AD
-    income and carries no official minimum.
+    income and, per the official schema, is non-negative like every other
+    field in this block.
     """
     GrsTrnOverOrReceipt: Decimal = Field(default=Decimal("0"), alias='GrsTrnOverOrReceipt', ge=0, le=30000000)
     GrsTrnOverBank: Optional[Decimal] = Field(default=None, alias='GrsTrnOverBank', ge=0, le=30000000)
     GrsTotalTrnOverInCash: Optional[Decimal] = Field(default=None, alias='GrsTotalTrnOverInCash', ge=0, le=30000000)
     GrsTrnOverstrOthMode: Optional[Decimal] = Field(default=None, alias='GrsTrnOverAnyOthMode', ge=0, le=30000000)
-    TotPersumptiveInc44AD: Decimal = Field(default=Decimal("0"), alias='TotPersumptiveInc44AD', le=99999999999999)
+    TotPersumptiveInc44AD: Decimal = Field(default=Decimal("0"), alias='TotPersumptiveInc44AD', ge=0, le=99999999999999)
     PersumptiveInc44AD6Per: Optional[Decimal] = Field(default=None, alias='PersumptiveInc44AD6Per', ge=0, le=99999999999999)
     PersumptiveInc44AD8Per: Optional[Decimal] = Field(default=None, alias='PersumptiveInc44AD8Per', ge=0, le=99999999999999)
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -733,14 +734,15 @@ class PLPLPartAPersumptiveInc44ADA(BaseModel):
     """Typed official 44ADA presumptive computation (form item 62).
 
     Official gross-receipt ceiling is Rs.75 lakh (the extended limit when cash
-    receipts stay within 5%); ``TotPersumptiveInc44ADA`` is the computed 44ADA
-    income and carries no official minimum.
+    receipts stay within 5%); ``TotPersumptiveInc44ADA`` is the computed
+    44ADA income, non-negative, capped at the schema's own distinct
+    Rs.99,99,999 (7-digit) ceiling for this specific field.
     """
     GrsReceipt: Decimal = Field(default=Decimal("0"), alias='GrsReceipt', ge=0, le=7500000)
     GrsTrnOverBank44ADA: Optional[Decimal] = Field(default=None, alias='GrsTrnOverBank44ADA', ge=0, le=7500000)
     GrsTotalTrnOverInCash44ADA: Optional[Decimal] = Field(default=None, alias='GrsTotalTrnOverInCash44ADA', ge=0, le=7500000)
     GrsTrnOverstrOthMode44ADA: Optional[Decimal] = Field(default=None, alias='GrsTrnOverAnyOthMode44ADA', ge=0, le=7500000)
-    TotPersumptiveInc44ADA: Optional[Decimal] = Field(default=None, alias='TotPersumptiveInc44ADA', le=9999999)
+    TotPersumptiveInc44ADA: Optional[Decimal] = Field(default=None, alias='TotPersumptiveInc44ADA', ge=0, le=9999999)
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 class PLPLPartANatOfBus44AERow(BaseModel):
@@ -768,23 +770,25 @@ class PLPLPartAGoodsDtlsUs44AERow(BaseModel):
 class PLPLPartANoBooksOfAccPL(BaseModel):
     """Typed official PARTA_PL PLPLPartANoBooksOfAccPL disclosure block.
 
-    Business and profession disclosures (form items 64(i)/(ii)). ``GrossProfit``
-    and ``GrossProfitPrf`` carry no official minimum (a gross result can be
-    negative); every other field is non-negative.
+    Business and profession disclosures (form items 64(i)/(ii)). ``GrossProfit``,
+    ``GrossProfitPrf``, and ``TotBusinessProfession`` carry no official
+    minimum *or* maximum (a gross/aggregate result can be negative and the
+    schema places no ceiling on any of the three); every other field is
+    non-negative with the standard 14-nines ceiling.
     """
     GrossReceipt: Decimal = Field(default=Decimal("0"), alias='GrossReceipt', ge=0, le=99999999999999)
     GrsRcptAccPayeeOrBankMode: Decimal = Field(default=Decimal("0"), alias='GrsRcptAccPayeeOrBankMode', ge=0, le=99999999999999)
     GrsRcptOtherMode: Decimal = Field(default=Decimal("0"), alias='GrsRcptOtherMode', ge=0, le=99999999999999)
-    GrossProfit: Decimal = Field(default=Decimal("0"), alias='GrossProfit', le=99999999999999)
+    GrossProfit: Decimal = Field(default=Decimal("0"), alias='GrossProfit')
     Expenses: Decimal = Field(default=Decimal("0"), alias='Expenses', ge=0, le=99999999999999)
     NetProfit: Decimal = Field(default=Decimal("0"), alias='NetProfit', ge=0, le=99999999999999)
     GrossReceiptPrf: Decimal = Field(default=Decimal("0"), alias='GrossReceiptPrf', ge=0, le=99999999999999)
     GrsRcptAccPayeeOrBankModePrf: Decimal = Field(default=Decimal("0"), alias='GrsRcptAccPayeeOrBankModePrf', ge=0, le=99999999999999)
     GrsRcptOtherModePrf: Decimal = Field(default=Decimal("0"), alias='GrsRcptOtherModePrf', ge=0, le=99999999999999)
-    GrossProfitPrf: Decimal = Field(default=Decimal("0"), alias='GrossProfitPrf', le=99999999999999)
+    GrossProfitPrf: Decimal = Field(default=Decimal("0"), alias='GrossProfitPrf')
     ExpensesPrf: Decimal = Field(default=Decimal("0"), alias='ExpensesPrf', ge=0, le=99999999999999)
     NetProfitPrf: Decimal = Field(default=Decimal("0"), alias='NetProfitPrf', ge=0, le=99999999999999)
-    TotBusinessProfession: Decimal = Field(default=Decimal("0"), alias='TotBusinessProfession', le=99999999999999)
+    TotBusinessProfession: Decimal = Field(default=Decimal("0"), alias='TotBusinessProfession')
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 class PLPLPartANonResidentPLDetailsRow(BaseModel):
@@ -801,7 +805,7 @@ class PLPLPartANonResidentPLDetailsRow(BaseModel):
 class PLPLPartANonResidentPL(BaseModel):
     """Typed official PARTA_PL PLPLPartANonResidentPL disclosure block."""
     GrossReceipt: Optional[Decimal] = Field(default=None, alias='GrossReceipt', ge=0, le=99999999999999)
-    NetProfit: Optional[Decimal] = Field(default=None, alias='NetProfit')
+    NetProfit: Optional[Decimal] = Field(default=None, alias='NetProfit', ge=0, le=99999999999999)
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 class PLPartA(BaseModel):
@@ -815,9 +819,9 @@ class PLPartA(BaseModel):
     PersumptiveInc44ADA: Optional[PLPLPartAPersumptiveInc44ADA] = Field(default=None, alias='PersumptiveInc44ADA')
     NatOfBus44AE: Optional[list[PLPLPartANatOfBus44AERow]] = Field(default=None, alias='NatOfBus44AE')
     GoodsDtlsUs44AE: Optional[list[PLPLPartAGoodsDtlsUs44AERow]] = Field(default=None, alias='GoodsDtlsUs44AE')
-    TotalNumOfMonths: Optional[Decimal] = Field(default=None, alias='TotalNumOfMonths')
-    TotalPrsumptvIncUs44EGoods: Optional[Decimal] = Field(default=None, alias='TotalPrsumptvIncUs44EGoods')
-    TotalPrsumptvIncUs44E: Optional[Decimal] = Field(default=None, alias='TotalPrsumptvIncUs44E')
+    TotalNumOfMonths: Optional[Decimal] = Field(default=None, alias='TotalNumOfMonths', ge=0, le=120)
+    TotalPrsumptvIncUs44EGoods: Optional[Decimal] = Field(default=None, alias='TotalPrsumptvIncUs44EGoods', ge=0, le=99999999999999)
+    TotalPrsumptvIncUs44E: Optional[Decimal] = Field(default=None, alias='TotalPrsumptvIncUs44E', ge=0, le=99999999999999)
     NoBooksOfAccPL: PLPLPartANoBooksOfAccPL = Field(default_factory=PLPLPartANoBooksOfAccPL, alias='NoBooksOfAccPL')
     TurnverFrmSpecActivity: Decimal = Field(default=Decimal("0"), alias='TurnverFrmSpecActivity', ge=0, le=99999999999999)
     GrossProfit: Optional[Decimal] = Field(default=None, alias='GrossProfit')

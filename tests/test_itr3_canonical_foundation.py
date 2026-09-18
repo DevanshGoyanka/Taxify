@@ -1000,6 +1000,50 @@ def test_itr3_parta_pl_negative_capable_fields_preserved() -> None:
         PLPLPLPartADebitsToPL(Freight=-1)
 
 
+def test_itr3_parta_pl_bounds_match_official_schema_exactly() -> None:
+    """Schedule 8 correction: every PARTA_PL leaf field's minimum/maximum must
+    match the official schema exactly -- not merely be present or absent.
+    Six fields previously diverged: TotPersumptiveInc44AD/44ADA, NonResidentPL
+    .NetProfit, TotalNumOfMonths, and TotalPrsumptvIncUs44E/44EGoods were all
+    missing their schema-mandated non-negative floor (and, for
+    TotalNumOfMonths, its 120-month ceiling too), while NoBooksOfAccPL's
+    GrossProfit/GrossProfitPrf/TotBusinessProfession carried a fabricated
+    14-nines ceiling the schema does not place on them at all."""
+    from pydantic import ValidationError
+    from app.schemas.itr3 import (
+        PLPartA, PLPLPartAPersumptiveInc44AD, PLPLPartAPersumptiveInc44ADA,
+        PLPLPartANonResidentPL, PLPLPartANoBooksOfAccPL,
+    )
+
+    # Schema-mandated non-negative floors, previously absent -- must now reject.
+    with pytest.raises(ValidationError):
+        PLPLPartAPersumptiveInc44AD(GrsTrnOverOrReceipt=0, TotPersumptiveInc44AD=-1)
+    with pytest.raises(ValidationError):
+        PLPLPartAPersumptiveInc44ADA(GrsReceipt=0, TotPersumptiveInc44ADA=-1)
+    with pytest.raises(ValidationError):
+        PLPLPartANonResidentPL(NetProfit=-1)
+    with pytest.raises(ValidationError):
+        PLPartA(TotalNumOfMonths=-1)
+    with pytest.raises(ValidationError):
+        PLPartA(TotalNumOfMonths=121)  # schema ceiling is 120 months
+    with pytest.raises(ValidationError):
+        PLPartA(TotalPrsumptvIncUs44E=-1)
+    with pytest.raises(ValidationError):
+        PLPartA(TotalPrsumptvIncUs44EGoods=-1)
+
+    # NoBooksOfAccPL.GrossProfit/GrossProfitPrf/TotBusinessProfession carry no
+    # official maximum at all -- a value beyond the ordinary 14-nines ceiling
+    # (applied to every other field in this block) must still be accepted.
+    beyond_ceiling = Decimal("100000000000000")  # 1 more than 14 nines
+    no_books = PLPLPartANoBooksOfAccPL(
+        GrossProfit=beyond_ceiling, GrossProfitPrf=beyond_ceiling,
+        TotBusinessProfession=beyond_ceiling,
+    )
+    assert no_books.GrossProfit == beyond_ceiling
+    assert no_books.GrossProfitPrf == beyond_ceiling
+    assert no_books.TotBusinessProfession == beyond_ceiling
+
+
 def test_itr3_builder_maps_parta_gen2_workspace() -> None:
     """Part A-GEN2 JSON carries mapped audit and nature-of-business data."""
     from app.engine.calculators.itr3 import compute as compute_itr3
