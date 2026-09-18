@@ -50,7 +50,7 @@ from app.engine.schedules.capital_gains import (
     post_loss_cg_baskets,
     STCGResult, LTCGResult, CG112AAsset, VDAEntry, CGAsset,
     _is_short_term, other_asset_gain, _normalized_land_exemptions,
-    unquoted_shares_50ca_adjustment,
+    unquoted_shares_50ca_adjustment, _claim_total,
     ITR3_OTHER_ASSETS_ST_EXEMPTION_SECTIONS,
     ITR3_OTHER_ASSETS_LT_EXEMPTION_SECTIONS,
 )
@@ -388,29 +388,20 @@ def compute(input_data: ITR3Input) -> ITR3Result:
             )
             if is_short:
                 stcg_land_cg.append(asset)
-                # Section 54B (agricultural land) is the ONLY §54-series
-                # exemption the official form allows against SHORT-term
-                # land/building gain (Schedule CG item A1d) -- this branch
-                # previously never accumulated ANY exemption at all, so a
-                # 54B claim on short-term land/building had zero tax
-                # effect on ITR-3 regardless of the per-asset fix above
-                # (that fix only affects bucket TARGETING; the exemption
-                # must also enter the aggregate `exemptions.total_exemption`
-                # pool via this scalar accumulator, exactly like the
-                # long-term branch below already does for its own four
-                # sections).
-                exempt_54b += tx.deduction_us54b
                 # Item A1d also allows 54G/54GA (shifting an industrial
                 # undertaking) against short-term land/building gain --
-                # NOT 54D, which is long-term-only per item B1d.
+                # NOT 54D, which is long-term-only per item B1d. 54G/54GA
+                # have no canonical `CGTransaction.exemptions` claim shape
+                # at all (the shared `CapitalGainExemptionClaim.section`
+                # Literal structurally excludes them), so they stay
+                # legacy-scalar-only, land/building-specific, accumulated
+                # here. 54B (also legal against short-term land/building)
+                # is handled below, once, via `_claim_total()` across ALL
+                # transactions -- see the post-loop comment for why.
                 exempt_54g += tx.deduction_us54g
                 exempt_54ga += tx.deduction_us54ga
             else:
                 ltcg_land_cg.append(asset)
-                exempt_54 += tx.deduction_us54
-                exempt_54b += tx.deduction_us54b
-                exempt_54ec += tx.deduction_us54ec
-                exempt_54f += tx.deduction_us54f
                 exempt_54d += tx.deduction_us54d
                 exempt_54g += tx.deduction_us54g
                 exempt_54ga += tx.deduction_us54ga
@@ -580,6 +571,52 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     )
 
     vda_income = compute_vda(vda_entries=vda_entries_list)
+    # Sections 54/54B/54EC/54F (unlike 54D/54G/54GA below) have a canonical
+    # `CGTransaction.exemptions` claim shape and are legally claimable
+    # against ANY eligible asset type, not just land/building -- e.g. 54F
+    # against a 112A-classified listed-equity LTCG (the official schema's
+    # own `SaleOfEquityShareUs112A.DeductionUs54F` field exists specifically
+    # for this). `_claim_total()` (shared with ITR-2's own already-working
+    # `compute()` entry point, `capital_gains.py`) sums a section's claims
+    # across a transaction list, preferring a canonical claim over the
+    # matching legacy `deduction_us54*` scalar per-transaction -- computed
+    # here for land/building and 112A/111A-equity transactions specifically,
+    # replacing the land/building-loop's former legacy-scalar-only,
+    # non-canonical-aware accumulation (which silently dropped any such
+    # claim on a 112A/111A transaction entirely from actual tax, even
+    # though the ITD builder's own `ded_54f_112a`/`_exemption_claim_total()`
+    # logic already correctly DISCLOSED the reduced 112A gain -- a real,
+    # severe disclosure/tax divergence confirmed via direct computation: a
+    # 112A LTCG with a genuine 54F claim was taxed on the FULL, un-reduced
+    # gain while the JSON showed the correctly-reduced figure).
+    #
+    # Deliberately EXCLUDES the generic "other assets" bucket (`else:`
+    # branch above, `other_asset_gain()`) -- that bucket already has its
+    # OWN complete, working exemption mechanism via the dedicated
+    # `other_assets_exemption_section`/`_amount` fields, applied directly
+    # at the per-transaction gain-computation source. Those same
+    # transactions may ALSO carry a nonzero legacy `deduction_us54*` scalar
+    # for unrelated reasons (confirmed live via this fix's own regression
+    # test) -- including "other assets" transactions in this `_claim_total()`
+    # call would double-subtract the same exemption once via
+    # `other_asset_gain()` and again via the legacy-scalar fallback here.
+    # Cross-form issue: none -- ITR-2 already gets the 112A/111A case right
+    # via the identical `_claim_total()` mechanism (its own "other assets"
+    # bucket, Sl. A5/B8, has no `other_asset_gain()`-style dedicated field
+    # at all, so no equivalent double-count risk exists there); this is a
+    # purely ITR-3-side fix, no ITR-2 code touched.
+    _claim_eligible_types = {
+        "land_building", "listed_equity_112a", "equity_oriented_fund_112a",
+        "business_trust_unit_112a", "listed_equity_111a", "equity_oriented_fund_111a",
+    }
+    _claim_eligible_txs = [
+        tx for tx in (input_data.cg_transactions or [])
+        if tx.asset_type.value in _claim_eligible_types
+    ]
+    exempt_54 = _claim_total(_claim_eligible_txs, "54")
+    exempt_54b = _claim_total(_claim_eligible_txs, "54B")
+    exempt_54ec = _claim_total(_claim_eligible_txs, "54EC")
+    exempt_54f = _claim_total(_claim_eligible_txs, "54F")
     exemptions = compute_exemptions(exempt_54, exempt_54b, exempt_54ec, exempt_54f)
     # Cross-form issue #10 (tracker): 54D/54G/54GA have no dedicated
     # ExemptionResult field (compute_exemptions() is shared with ITR-1/2/4

@@ -31,6 +31,7 @@ from app.engine.calculators.itr3 import compute as compute_itr3
 from app.schemas.itr1 import HousePropertyIncome, PropertyType
 from app.schemas.itr2 import (
     BFLossItem,
+    CapitalGainExemptionClaim,
     CGDtaaEntry,
     CGTransaction,
     CGAssetType,
@@ -548,6 +549,37 @@ def test_54f_reduces_other_ltcg_before_112a(form) -> None:
     post_loss_cg = r.schedules["post_loss_cg"]
     assert post_loss_cg["112"] == D("100000")  # 300000 - 200000
     assert post_loss_cg["112a_gross"] == D("1500000")  # fully untouched
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_54f_canonical_claim_on_112a_transaction_reduces_actual_tax(form) -> None:
+    """Cross-form issue (ITR-3-only, found and fixed 2026-09-19): a section
+    54F exemption legally claimed against a 112A-classified LTCG (the
+    official schema's own `SaleOfEquityShareUs112A.DeductionUs54F` field
+    exists specifically for this) was correctly DISCLOSED by ITR-3's own
+    builder (`ded_54f_112a` reduces `CapgainonAssets`) but had ZERO effect
+    on the actual taxed amount -- `calculators/itr3.py` only ever read the
+    canonical `CGTransaction.exemptions` claim list for land/building rows
+    (via legacy `deduction_us54*` scalars), never for 112A/111A-equity
+    rows. ITR-2 already gets this right via the shared `_claim_total()`
+    mechanism (`capital_gains.py`'s own `compute()` entry point) -- this
+    test pins both forms to the identical, correct behavior."""
+    tx = CGTransaction(
+        asset_type=CGAssetType.LISTED_EQUITY_112A,
+        full_consideration=D("2000000"), cost_of_acquisition=D("500000"),
+        fair_market_value_jan2018=D("500000"),
+        date_of_acquisition=date(2015, 1, 1), date_of_transfer=date(2026, 1, 1),
+        exemptions=[CapitalGainExemptionClaim(
+            section="54F", transfer_date=date(2026, 1, 1), eligible_gain=D("1000000"),
+            investment_amount=D("1000000"), investment_date=date(2026, 2, 1),
+        )],
+    )
+    r = _compute(form, cg_transactions=[tx])
+    # Gross gain 1,500,000 - 54F claim 1,000,000 = 500,000 actually taxed
+    # (not the full, un-reduced 1,500,000).
+    assert r.schedules["cg"].total_capital_gains == D("500000")
+    si = _si(r)
+    assert si["112A"].gross_income == D("500000")
 
 
 @pytest.mark.parametrize("form", _FORMS)
