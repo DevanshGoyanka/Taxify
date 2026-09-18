@@ -1967,6 +1967,86 @@ def _slump_sale_block(rows: list, is_long_term: bool) -> dict[str, Any]:
     }
 
 
+def _cg_dtaa_rows(entries: list) -> list[dict[str, Any]]:
+    """Schedule CG items A9/B12 -- DTAA-rate capital-gains claim rows
+    (official ``NRIDTAADtls``). Identical shape/logic to ITR-2's own
+    already-shipped local helper of the same purpose (`itd/itr2.py`'s own
+    nested `_cg_dtaa_rows`) -- ported verbatim rather than re-derived,
+    since both forms disclose this item under the identical schema shape."""
+    return [
+        {
+            "DTAAamt": _to_rupees(e.amount),
+            "ItemNoincl": e.item_no_incl,
+            "CountryName": e.country_name,
+            "CountryCodeExcludingIndia": e.country_code,
+            "DTAAarticle": e.dtaa_article,
+            "RateAsPerTreaty": float(e.rate_as_per_treaty),
+            "TaxRescertifiedFlag": e.tax_residency_certificate,
+            "SecITAct": e.sec_it_act,
+            "RateAsPerITAct": float(e.rate_as_per_it_act),
+            "ApplicableRate": float(e.applicable_rate),
+        }
+        for e in entries
+    ]
+
+
+# Schedule CG items A7 (STCG)/B10 (LTCG) -- the official schema restricts
+# the prior-year-deposit table's own year/section enums, and they DIFFER
+# between the two tables (confirmed by direct introspection of both
+# UnutilizedCgPrvYrStcg/UnutilizedCgPrvYrLtcg schema definitions): STCG
+# allows only sections 54B/54G/54GA; LTCG additionally allows 54/54D/54F/
+# 54GB. Both share the same three transfer-year values.
+_UNUTILIZED_CG_YEARS = frozenset({"2022-23", "2023-24", "2024-25"})
+_UNUTILIZED_CG_STCG_SECTIONS = frozenset({"54B", "54G", "54GA"})
+_UNUTILIZED_CG_LTCG_SECTIONS = frozenset({"54", "54B", "54D", "54F", "54G", "54GA", "54GB"})
+
+
+def _unutilized_cg_block(
+    flag: str, rows: list, valid_sections: frozenset[str], require_amt_utilized: bool,
+) -> dict[str, Any]:
+    """
+    Build the shared shape behind Schedule CG item A7 (STCG)/B10 (LTCG) --
+    amount deemed to be capital gains from an unutilized prior-year
+    Capital Gains Accounts Scheme deposit. Returns GENERIC keys
+    (``Flag``/``UnutilizedCg``/``AmtDeemed``/``TotalAmtDeemed``); the
+    caller renames them to the STCG- or LTCG-specific official field
+    names, since Python dict-literal keys can't cleanly branch on a
+    boolean the way the rest of this builder's inline dicts do.
+
+    ``AmtDeemed`` sums every row's own ``amount_unutilized`` regardless of
+    whether that row's year/section happens to validate against the
+    schema's own fixed enum (a real, statutorily-deemed capital gain does
+    not stop being real just because a taxpayer's free-text label doesn't
+    match the enum) -- but the per-row disclosure array
+    (``UnutilizedCgPrvYrDtls``) only includes the schema-valid rows,
+    omitted (not fabricated) when a row's label doesn't validate, matching
+    this codebase's established discipline. The LTCG table additionally
+    requires ``AmtUtilized`` on every disclosed row (STCG's own schema
+    leaves it optional).
+    """
+    total_deemed = sum((r.amount_unutilized for r in rows), Decimal("0"))
+    detail_rows = []
+    for r in rows:
+        if r.prev_year_transferred not in _UNUTILIZED_CG_YEARS or r.section_claimed not in valid_sections:
+            continue
+        row: dict[str, Any] = {
+            "PrvYrInWhichAsstTrnsfrd": r.prev_year_transferred,
+            "SectionClmd": r.section_claimed,
+            "AmtUnutilized": _to_rupees(r.amount_unutilized),
+        }
+        if r.year_asset_acquired:
+            row["YrInWhichAssetAcq"] = r.year_asset_acquired
+        if require_amt_utilized or r.amount_utilized:
+            row["AmtUtilized"] = _to_rupees(r.amount_utilized)
+        detail_rows.append(row)
+    return {
+        "Flag": flag if flag in ("Y", "N", "X") else "N",
+        "UnutilizedCg": {"UnutilizedCgPrvYrDtls": detail_rows} if detail_rows else None,
+        "AmtDeemed": _to_rupees(total_deemed),
+        "TotalAmtDeemed": _to_rupees(total_deemed),
+    }
+
+
 def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> dict[str, Any]:
     """Serialize typed ITR-3 capital-gains evidence into ScheduleCGFor23.
 
@@ -2146,6 +2226,23 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
     # in the year) are summed here.
     stcg_slump_sale_block = _slump_sale_block(typed_input.cg_slump_sale_stcg, is_long_term=False)
     ltcg_slump_sale_block = _slump_sale_block(typed_input.cg_slump_sale_ltcg, is_long_term=True)
+    # Schedule CG items A9/B12 -- DTAA-rate capital-gains claims.
+    stcg_dtaa_rows = _cg_dtaa_rows(typed_input.cg_stcg_dtaa_entries or [])
+    stcg_dtaa_not_chargeable = sum((e.amount for e in (typed_input.cg_stcg_dtaa_entries or []) if not e.chargeable_in_india), zero)
+    stcg_dtaa_chargeable = sum((e.amount for e in (typed_input.cg_stcg_dtaa_entries or []) if e.chargeable_in_india), zero)
+    ltcg_dtaa_rows = _cg_dtaa_rows(typed_input.cg_ltcg_dtaa_entries or [])
+    ltcg_dtaa_not_chargeable = sum((e.amount for e in (typed_input.cg_ltcg_dtaa_entries or []) if not e.chargeable_in_india), zero)
+    ltcg_dtaa_chargeable = sum((e.amount for e in (typed_input.cg_ltcg_dtaa_entries or []) if e.chargeable_in_india), zero)
+    # Schedule CG items A7/B10 -- unutilized Capital Gains Accounts Scheme
+    # deposit deemed capital gains.
+    stcg_unutilized = _unutilized_cg_block(
+        typed_input.cg_stcg_unutilized_flag, typed_input.cg_stcg_unutilized_deposits or [],
+        _UNUTILIZED_CG_STCG_SECTIONS, require_amt_utilized=False,
+    )
+    ltcg_unutilized = _unutilized_cg_block(
+        typed_input.cg_ltcg_unutilized_flag, typed_input.cg_ltcg_unutilized_deposits or [],
+        _UNUTILIZED_CG_LTCG_SECTIONS, require_amt_utilized=True,
+    )
     # Schedule CG item A3 -- STCG on equity shares/equity-oriented fund
     # units/business trust units, STT paid (s.111A). ITR-3 filers (
     # individuals/HUF with business income) are never FII/FPI, so this is
@@ -2162,10 +2259,13 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         "NRITransacSec48Dtl": {"NRItaxSTTPaid": _to_rupees(typed_input.cg_nri_stcg_stt_paid), "NRItaxSTTNotPaid": _to_rupees(typed_input.cg_nri_stcg_stt_not_paid)},
         "NRISecur115AD": {"FullValueConsdRecvUnqshr": 0, "FairMrktValueUnqshr": 0, "FullValueConsdSec50CA": 0, "FullValueConsdOthUnqshr": 0, "FullConsideration": 0, "DeductSec48": {"AquisitCost": 0, "ImproveCost": 0, "ExpOnTrans": 0, "TotalDedn": 0}, "BalanceCG": 0, "LossSec94of7Or94of8": 0, "CapgainonAssets": 0},
         "SaleOnOtherAssets": stcg_other,
-        "UnutilizedStcgFlag": "N", "AmtDeemedStcg": 0, "TotalAmtDeemedStcg": 0,
+        "UnutilizedStcgFlag": stcg_unutilized["Flag"],
+        **({"UnutilizedCg": stcg_unutilized["UnutilizedCg"]} if stcg_unutilized["UnutilizedCg"] else {}),
+        "AmtDeemedStcg": stcg_unutilized["AmtDeemed"], "TotalAmtDeemedStcg": stcg_unutilized["TotalAmtDeemed"],
         "SlumpSaleInStcg": stcg_slump_sale_block,
         "PassThrIncNatureSTCG": pass_stcg, "PassThrIncNatureSTCG20Per": pass_stcg_111a, "PassThrIncNatureSTCG30Per": pass_stcg_other, "PassThrIncNatureSTCGAppRate": 0,
-        "TotalAmtNotTaxUsDTAAStcg": 0, "TotalAmtTaxUsDTAAStcg": 0,
+        **({"NRICgDTAA": {"NRIDTAADtls": stcg_dtaa_rows}} if stcg_dtaa_rows else {}),
+        "TotalAmtNotTaxUsDTAAStcg": _to_rupees(stcg_dtaa_not_chargeable), "TotalAmtTaxUsDTAAStcg": _to_rupees(stcg_dtaa_chargeable),
         **({"CapitalLossBuyBackShares": stcg_buyback_loss_block} if stcg_buyback_loss_block else {}),
         "TotalSTCG": _to_rupees(total_stcg),
     }
@@ -2176,9 +2276,14 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         **({"NRIOnSec112and115": {"NRIOnSec112and115Dtls": nri_112_115_rows}} if nri_112_115_rows else {}),
         "SaleofAssetNADtls": {"SaleofAssetNA": ltcg_other},
         "SlumpSaleInLtcgDtls": {"SlumpSaleInLtcg": ltcg_slump_sale_block},
-        "UnutilizedLtcgFlag": "N", "AmtDeemedLtcg": 0, "TotalAmtDeemedLtcg": 0, "PassThrIncNatureLTCG": pass_ltcg, "PassThrIncNatureLTCGUs112A12_5Per": pass_ltcg_112a, "PassThrIncNatureLTCG12_5Per": pass_ltcg_other, "TotalAmtNotTaxUsDTAALtcg": 0,
+        "UnutilizedLtcgFlag": ltcg_unutilized["Flag"],
+        **({"UnutilizedCg": ltcg_unutilized["UnutilizedCg"]} if ltcg_unutilized["UnutilizedCg"] else {}),
+        "AmtDeemedLtcg": ltcg_unutilized["AmtDeemed"], "TotalAmtDeemedLtcg": ltcg_unutilized["TotalAmtDeemed"],
+        "PassThrIncNatureLTCG": pass_ltcg, "PassThrIncNatureLTCGUs112A12_5Per": pass_ltcg_112a, "PassThrIncNatureLTCG12_5Per": pass_ltcg_other,
+        **({"NRICgDTAA": {"NRIDTAADtls": ltcg_dtaa_rows}} if ltcg_dtaa_rows else {}),
+        "TotalAmtNotTaxUsDTAALtcg": _to_rupees(ltcg_dtaa_not_chargeable),
         **({"CapitalLossBuyBackShares": ltcg_buyback_loss_block} if ltcg_buyback_loss_block else {}),
-        "TotalAmtTaxUsDTAALtcg": 0, "TotalLTCG": _to_rupees(total_ltcg),
+        "TotalAmtTaxUsDTAALtcg": _to_rupees(ltcg_dtaa_chargeable), "TotalLTCG": _to_rupees(total_ltcg),
     }
     # TotDeductClaim -- the calculator's own authoritative exemption total
     # (`compute_exemptions()`'s 54/54B/54EC/54F/115F sum), not re-summed

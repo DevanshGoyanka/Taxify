@@ -10,9 +10,9 @@ from typing import Any
 
 from app.engine.draft_to_itr1_input import DraftMappingError, draft_to_itr1_input, _to_date
 from app.schemas.itr3 import AuditInfo, BalanceSheet, BSOfficial, BSProprietorsFund, BSReserves, BSLoanGroup, BSUnsecuredLoanGroup, BSAdvances, BSFixedAsset, BSCurrentAssets, BSInventory, BSCashBank, BSCurrentLiabilities, BSProvisions, BSInvestments, BSLongTermInv, BSTradeInv, BSLoanAdvances, BSMiscAdjust, BSNoBooks, BSRupeeLoan, BusinessIncome, ITR3BusinessAccounts, ITR3Input, ITR3ScheduleSEmployer, ITR3ScheduleHPProperty, ManufacturingAccount, MfgOpeningInventory, MfgClosingStock, NatureOfBusiness, ProfitAndLoss, PLPartA, PLPLPartACreditsToPL, PLPLPartATaxProvAppr, PLPLPartANoBooksOfAccPL, PLPLPartADebitsToPL, PLPLPLPartADebitsToPLInterestExpdrtDtls, PLPLPLPartACreditsToPLOthIncome, TradingAccount, TradingOtherRevenueEntry, TradingOtherIncomeEntry, TradingExciseCustomsVAT, TradingDutyTaxPay, TradingDutyTaxPayExciseCustomsVAT, ITR3PartAOI, ITR3PartAQD, ScheduleESR, ScheduleGST, ScheduleICDS, ITR3ScheduleTPSA, ITR3DeductionDetails, ITR3DeductionDonation, ITR3DeductionLoan, ITR3Schedule80IA, ITR3Schedule80IB, ITR3Schedule80IC, ITR3Schedule80RA, ITR3Schedule10AA, ITR3Schedule80D, ITR3Schedule80DCategory, ITR3Schedule80DHealth, ITR3Schedule80DInsurance, ITR3Schedule80DD, ITR3Schedule80U, \
-    ITR3DepreciationSchedules, ScheduleDPM, ScheduleDOA, ScheduleDEP, ScheduleDCG, ITR3SlumpSaleRow
+    ITR3DepreciationSchedules, ScheduleDPM, ScheduleDOA, ScheduleDEP, ScheduleDCG, ITR3SlumpSaleRow, ITR3UnutilizedCGRow
 from app.schemas.itr2 import ResidentialStatus as ITR3ResidentialStatus, ReturnFileSection
-from app.engine.draft_to_itr2_input import _map_112a_scrips, _map_immovable_gains, _map_equity_stt_stcg, _map_other_assets, _map_nri_fii_securities, _map_nri_112_115_securities, _map_buyback_losses, _map_cg_nri_proviso_48, _map_vda_transactions, _map_fsi_entries, _map_tr1_entries, _map_foreign_assets, _map_asset_liability, _map_schedule_5a, _map_esop_deferrals
+from app.engine.draft_to_itr2_input import _map_112a_scrips, _map_immovable_gains, _map_equity_stt_stcg, _map_other_assets, _map_nri_fii_securities, _map_nri_112_115_securities, _map_buyback_losses, _map_cg_nri_proviso_48, _map_cg_dtaa_entries, _map_vda_transactions, _map_fsi_entries, _map_tr1_entries, _map_foreign_assets, _map_asset_liability, _map_schedule_5a, _map_esop_deferrals
 from app.schemas.itr2 import CG112AScrip, CGTransaction, CGAssetType, ScheduleSIEntry, VDATransaction, SPIEntry, PTIEntry
 from app.schemas.return_draft import ReturnDraft
 from app.engine.validators.itr3.parta_pl import validate_parta_pl_arithmetic
@@ -1038,6 +1038,37 @@ def _map_slump_sale(draft: ReturnDraft) -> tuple[list[ITR3SlumpSaleRow], list[IT
     )
 
 
+def _map_unutilized_cg(draft: ReturnDraft) -> dict[str, Any]:
+    """
+    Map Schedule CG items A7 (STCG)/B10 (LTCG) -- amount deemed to be
+    capital gains because a prior-year Capital Gains Accounts Scheme
+    deposit was not utilized within the statutory period.
+    (``capitalGainsSchedule.stUnutilizedFlag``/``stUnutilized``/
+    ``ltUnutilizedFlag``/``ltUnutilized`` -- already typed on the draft
+    schema, including the Y/N/X flag already matching the official
+    schema's own enum exactly).
+
+    No existing ITR-2 precedent for the LTCG side (confirmed absent by
+    reading ``itd/itr2.py`` directly -- flagged as a cross-form issue in
+    the tracker, not fixed here per this push's own ground rules).
+    """
+    schedule = draft.capitalGainsSchedule
+    def _row(dep: Any) -> ITR3UnutilizedCGRow:
+        return ITR3UnutilizedCGRow(
+            prev_year_transferred=dep.transferPreviousYear,
+            section_claimed=dep.sectionClaimed,
+            year_asset_acquired=dep.yearAssetAcquired or "",
+            amount_utilized=dep.amountUtilized,
+            amount_unutilized=dep.amountUnutilized,
+        )
+    return {
+        "cg_stcg_unutilized_flag": schedule.stUnutilizedFlag,
+        "cg_ltcg_unutilized_flag": schedule.ltUnutilizedFlag,
+        "cg_stcg_unutilized_deposits": [_row(d) for d in schedule.stUnutilized],
+        "cg_ltcg_unutilized_deposits": [_row(d) for d in schedule.ltUnutilized],
+    }
+
+
 def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
     """Map a canonical draft to ITR3Input without inventing identity data."""
     if draft.form != "ITR-3":
@@ -1105,6 +1136,8 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
     cg_buyback_losses = _map_buyback_losses(draft)
     cg_nri_proviso_48 = _map_cg_nri_proviso_48(draft)
     cg_slump_sale_stcg, cg_slump_sale_ltcg = _map_slump_sale(draft)
+    cg_stcg_dtaa_entries, cg_ltcg_dtaa_entries = _map_cg_dtaa_entries(draft)
+    cg_unutilized = _map_unutilized_cg(draft)
     vda_transactions = _map_vda_transactions(draft)
     fsi_entries = _map_fsi_entries(draft)
     tr1_entries = _map_tr1_entries(draft)
@@ -1194,6 +1227,9 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
         **cg_nri_proviso_48,
         cg_slump_sale_stcg=cg_slump_sale_stcg,
         cg_slump_sale_ltcg=cg_slump_sale_ltcg,
+        cg_stcg_dtaa_entries=cg_stcg_dtaa_entries,
+        cg_ltcg_dtaa_entries=cg_ltcg_dtaa_entries,
+        **cg_unutilized,
         cg_115ad_scrips=cg_115ad_scrips,
         vda_transactions=vda_transactions,
         spi_entries=[SPIEntry(specified_person_name=row.specifiedPersonName, pan=row.pan or None, relationship=row.relationship, amount_included=row.amountIncluded, head_of_income=row.headOfIncome) for row in draft.clubbedIncome if row.specifiedPersonName and row.relationship],

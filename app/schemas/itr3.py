@@ -42,7 +42,7 @@ from app.schemas.itr1 import (
     TDS1Entry, TDS2Entry, TDS3Entry, TCSEntry,
 )
 from app.schemas.itr2 import (
-    CGTransaction, CG112AScrip, VDATransaction,
+    CGTransaction, CG112AScrip, VDATransaction, CGDtaaEntry,
     BFLossItem, ScheduleSIEntry, AgriculturalIncome, ExemptIncome,
     FSICountryEntry, TR1Entry, SPIEntry, PTIEntry, AMTInput,
     ForeignAssetEntry, AssetLiabilityInput, Schedule5AInput, ESOPDeferralInput,
@@ -1882,6 +1882,30 @@ class ITR3SlumpSaleRow(BaseModel):
     exemption_amount: Decimal = Field(default=Decimal("0"), ge=0)
 
 
+class ITR3UnutilizedCGRow(BaseModel):
+    """
+    One prior-year Capital Gains Accounts Scheme deposit row disclosed as
+    still (wholly or partly) unutilized (Schedule CG items A7/B10). The
+    official schema restricts ``prev_year_transferred``/``section_claimed``
+    to a fixed enum that DIFFERS between the STCG and LTCG tables --
+    STCG: years 2022-23/2023-24/2024-25, sections 54B/54G/54GA only;
+    LTCG: the same three years, sections 54/54B/54D/54F/54G/54GA/54GB
+    (confirmed by direct introspection of both
+    ``UnutilizedCgPrvYrStcg``/``UnutilizedCgPrvYrLtcg`` schema definitions,
+    not assumed from the shared row shape) -- so a row with an
+    out-of-enum value for either field is dropped from the builder's own
+    ``UnutilizedCgPrvYrDtls`` disclosure array (its own ``amount_unutilized``
+    still counts toward ``AmtDeemedStcg``/``AmtDeemedLtcg``, since that is
+    a real, statutorily-deemed capital gain regardless of whether the
+    taxpayer's own free-text year/section label happens to validate).
+    """
+    prev_year_transferred: str = ""
+    section_claimed: str = ""
+    year_asset_acquired: str = ""
+    amount_utilized: Decimal = Field(default=Decimal("0"), ge=0)
+    amount_unutilized: Decimal = Field(default=Decimal("0"), ge=0)
+
+
 # ---------------------------------------------------------------------------
 
 class ITR3Input(BaseModel):
@@ -2007,6 +2031,28 @@ class ITR3Input(BaseModel):
     # fields above.
     cg_slump_sale_stcg: List[ITR3SlumpSaleRow] = Field(default_factory=list)
     cg_slump_sale_ltcg: List[ITR3SlumpSaleRow] = Field(default_factory=list)
+    # Schedule CG items A9/B12 -- DTAA-rate capital-gains claims (official
+    # NRIDTAADtls). Same shared row type and mapper ITR-2 already has and
+    # already uses (`app/engine/draft_to_itr2_input.py::
+    # _map_cg_dtaa_entries`, reading the identical `capitalGainsSchedule.
+    # stDtaa`/`ltDtaa` draft fields).
+    cg_stcg_dtaa_entries: List[CGDtaaEntry] = Field(default_factory=list)
+    cg_ltcg_dtaa_entries: List[CGDtaaEntry] = Field(default_factory=list)
+    # Schedule CG items A7 (STCG)/B10 (LTCG) -- amount deemed to be capital
+    # gains because a prior-year Capital Gains Accounts Scheme deposit
+    # (u/s 54B/54G/54GA for STCG; 54/54B/54D/54F/54G/54GA/54GB for LTCG)
+    # was not utilized within the statutory period. The LTCG side has NO
+    # existing ITR-2 precedent to port at all -- confirmed by reading
+    # `itd/itr2.py` directly: ITR-2's own B10-equivalent item is itself
+    # still hardcoded ("UnutilizedLtcgFlag": "N", zeros) -- flagged as a
+    # cross-form issue in the tracker, not fixed here (ground rule: never
+    # edit ITR-1/2/4 code as a side effect of ITR-3 work). Built fresh for
+    # both sides here since the frontend already captures the full
+    # per-year row detail for both STCG and LTCG identically.
+    cg_stcg_unutilized_flag: str = "N"
+    cg_ltcg_unutilized_flag: str = "N"
+    cg_stcg_unutilized_deposits: List[ITR3UnutilizedCGRow] = Field(default_factory=list)
+    cg_ltcg_unutilized_deposits: List[ITR3UnutilizedCGRow] = Field(default_factory=list)
 
     # --- Loss Set-Off ---
     bf_losses: Optional[List[BFLossItem]] = Field(default=None)

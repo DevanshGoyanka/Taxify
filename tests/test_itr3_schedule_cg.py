@@ -1,27 +1,40 @@
 """Tests for ITR-3 Schedule CG (tracker row #20 -- Schedule CGFor23),
-covering the specific gaps closed this turn: Schedule CG items A2/B2
-(slump sale, section 50B), A4 (NRI STCG shares/debentures), B3-proviso
-(NRI LTCG without indexation, s.48 first proviso), B8 (NRI foreign
-exchange asset, s.115F), Schedule D's ``TotDeductClaim``, and a genuine
-``NameError``-risk dead-code fallback function reference.
+covering the specific gaps closed across two rounds: Schedule CG items
+A2/B2 (slump sale, section 50B), A4 (NRI STCG shares/debentures),
+B3-proviso (NRI LTCG without indexation, s.48 first proviso), B8 (NRI
+foreign exchange asset, s.115F), A9/B12 (DTAA-rate claims), A7/B10
+(unutilized Capital Gains Accounts Scheme deposit deemed capital gains),
+Schedule D's ``TotDeductClaim``, and a genuine ``NameError``-risk
+dead-code fallback function reference.
 
-**A2/B2 (slump sale) is genuinely ITR-3-only** (section 50B requires a
-business; confirmed absent from ITR-2's own official form text) -- new
-schema/mapper/builder, no ITR-2 precedent to port.
+**A2/B2 (slump sale) and A7/B10 (unutilized CGAS -- LTCG side only) are
+genuinely ITR-3-only or ITR-3-first**: slump sale needs a business
+(confirmed absent from ITR-2's own official form text); the unutilized-
+CGAS LTCG item has NO existing ITR-2 precedent at all (confirmed by
+reading `itd/itr2.py` directly -- ITR-2's own B10-equivalent is itself
+still hardcoded, flagged as a cross-form issue in the tracker, not fixed).
 
-**A4/B3-proviso/B8 already had a working ITR-2 mapper**
-(``app/engine/draft_to_itr2_input.py::_map_cg_nri_proviso_48``) and
-working ITR-2 builder helpers (``app/engine/itd/itr2.py::_nri_proviso_48``/
-``_nri_foreign_asset``) -- both reused directly for ITR-3 rather than
-re-derived, since both forms read the identical
-``ReturnDraft.capitalGainsSchedule.stSection48``/``ltNriProviso48``/
-``ltForeignAssets`` fields and disclose them under the identical schema
-shape (confirmed by direct schema introspection, not assumed).
+**A4/B3-proviso/B8/A9-B12 (DTAA) already had a working ITR-2 mapper**
+(``_map_cg_nri_proviso_48``/``_map_cg_dtaa_entries``) and working ITR-2
+builder helpers/logic (``_nri_proviso_48``/``_nri_foreign_asset``/the
+local ``_cg_dtaa_rows``) -- reused/ported directly rather than re-derived,
+since both forms read the identical shared draft fields and disclose them
+under the identical schema shape (confirmed by direct schema
+introspection, not assumed).
 
-**Not attempted this turn, deliberately deferred with reason** (Schedule
-CG is the largest, most complex ITR-3 schedule; this pass closed the
-clearest remaining gaps rather than force the entire schedule into one
-sitting):
+**A7 (unutilized CGAS, STCG side) and A7/B10's own per-row enum
+validation** are new this round: `AmtDeemedStcg`/`AmtDeemedLtcg` sum every
+row's `amount_unutilized` regardless of whether the row's free-text
+year/section label validates against the schema's own fixed enum (a real
+deemed capital gain doesn't stop being real just because the label
+doesn't parse), while the per-row disclosure array only includes rows
+that DO validate -- and the valid section set genuinely DIFFERS between
+the STCG (54B/54G/54GA only) and LTCG (54/54B/54D/54F/54G/54GA/54GB)
+tables, confirmed by direct schema introspection of both
+``UnutilizedCgPrvYrStcg``/``UnutilizedCgPrvYrLtcg`` definitions.
+
+**Still not attempted, deliberately deferred with reason** (Schedule CG
+is the largest, most complex ITR-3 schedule):
 - The per-target current-year loss set-off matrix (``TotLossSetOff``,
   ``InStcgAppRate``/``InStcgDTAARate``'s own set-off sub-fields) remains
   disclosure-incomplete -- same class of gap Schedule BP's own Part E
@@ -221,6 +234,146 @@ def test_tot_deduct_claim_reflects_calculator_exemption_total_not_hardcoded_zero
     cg_result = result.schedules.get("cg")
     block = _schedule_cg_for23_typed(cg_result, typed_input)
     assert block["DeducClaimInfo"]["TotDeductClaim"] == 2000000
+
+
+# ---------------------------------------------------------------------------
+# A9/B12 -- DTAA-rate capital-gains claims
+# ---------------------------------------------------------------------------
+
+def test_dtaa_entries_reach_json_and_split_chargeable_vs_not() -> None:
+    from app.schemas.itr2 import CGDtaaEntry
+
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input = typed_input.model_copy(update={
+        "cg_stcg_dtaa_entries": [
+            CGDtaaEntry(amount=Decimal("100000"), item_no_incl="A3ie", country_name="USA", country_code="2", dtaa_article="13", rate_as_per_treaty=Decimal("0"), sec_it_act="111A", rate_as_per_it_act=Decimal("15"), applicable_rate=Decimal("0")),
+            CGDtaaEntry(amount=Decimal("50000"), item_no_incl="A3ie", country_name="UK", country_code="21", dtaa_article="14", rate_as_per_treaty=Decimal("10"), sec_it_act="111A", rate_as_per_it_act=Decimal("15"), applicable_rate=Decimal("10")),
+        ],
+    })
+    result = compute_itr3(typed_input)
+    block = _schedule_cg_for23_typed(result.schedules.get("cg"), typed_input)
+    stcg = block["ShortTermCapGainFor23"]
+    assert len(stcg["NRICgDTAA"]["NRIDTAADtls"]) == 2
+    # First row: rate_as_per_treaty == 0 -> not chargeable in India.
+    assert stcg["TotalAmtNotTaxUsDTAAStcg"] == 100000
+    # Second row: rate_as_per_treaty > 0 -> chargeable at the DTAA rate.
+    assert stcg["TotalAmtTaxUsDTAAStcg"] == 50000
+
+
+def test_dtaa_entries_reach_json_validates_against_official_schema() -> None:
+    """NOTE: ``item_no_incl`` must be one of the official schema's own
+    enum of item labels (e.g. "B1g" for LTCG land/building) -- confirmed
+    by direct schema validation, not assumed from ITR-2's own more
+    permissive Pydantic field (`CGDtaaEntry.item_no_incl` has no enum
+    constraint at the Python level, and the shared mapper's own default
+    for a blank frontend field, "NA", is schema-invalid here). This is a
+    pre-existing, shared-code limitation (affects ITR-2 too), flagged in
+    the tracker's cross-form-issues log, not fixed as part of this pass."""
+    from app.schemas.itr2 import CGDtaaEntry
+
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input = typed_input.model_copy(update={
+        "cg_ltcg_dtaa_entries": [
+            CGDtaaEntry(amount=Decimal("300000"), item_no_incl="B1g", country_name="Singapore", country_code="65", dtaa_article="13", rate_as_per_treaty=Decimal("0"), sec_it_act="112A", rate_as_per_it_act=Decimal("12.5"), applicable_rate=Decimal("0")),
+        ],
+    })
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    cg = document["ITR"]["ITR3"]["ScheduleCGFor23"]
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
+    assert not errors, "\n".join(e.message for e in errors)
+    assert cg["LongTermCapGain23"]["TotalAmtNotTaxUsDTAALtcg"] == 300000
+
+
+def test_dtaa_omitted_when_no_entries() -> None:
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    result = compute_itr3(typed_input)
+    block = _schedule_cg_for23_typed(result.schedules.get("cg"), typed_input)
+    assert "NRICgDTAA" not in block["ShortTermCapGainFor23"]
+    assert "NRICgDTAA" not in block["LongTermCapGain23"]
+
+
+# ---------------------------------------------------------------------------
+# A7/B10 -- unutilized Capital Gains Accounts Scheme deposit
+# ---------------------------------------------------------------------------
+
+def test_unutilized_stcg_deposit_reaches_json_with_valid_row() -> None:
+    from app.schemas.itr3 import ITR3UnutilizedCGRow
+
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input = typed_input.model_copy(update={
+        "cg_stcg_unutilized_flag": "Y",
+        "cg_stcg_unutilized_deposits": [
+            ITR3UnutilizedCGRow(prev_year_transferred="2023-24", section_claimed="54G", year_asset_acquired="2024", amount_utilized=Decimal("100000"), amount_unutilized=Decimal("50000")),
+        ],
+    })
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    cg = document["ITR"]["ITR3"]["ScheduleCGFor23"]
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
+    assert not errors, "\n".join(e.message for e in errors)
+    stcg = cg["ShortTermCapGainFor23"]
+    assert stcg["UnutilizedStcgFlag"] == "Y"
+    assert stcg["AmtDeemedStcg"] == 50000
+    assert stcg["TotalAmtDeemedStcg"] == 50000
+    assert stcg["UnutilizedCg"]["UnutilizedCgPrvYrDtls"][0]["SectionClmd"] == "54G"
+
+
+def test_unutilized_stcg_invalid_section_still_counts_toward_total_but_not_disclosed() -> None:
+    """54F is not a valid STCG-table section (LTCG-only) -- the row must
+    be dropped from the disclosure array, but its amount must still count
+    toward AmtDeemedStcg since it is a real deemed capital gain."""
+    from app.schemas.itr3 import ITR3UnutilizedCGRow
+
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input = typed_input.model_copy(update={
+        "cg_stcg_unutilized_deposits": [
+            ITR3UnutilizedCGRow(prev_year_transferred="2023-24", section_claimed="54F", amount_unutilized=Decimal("75000")),
+        ],
+    })
+    result = compute_itr3(typed_input)
+    block = _schedule_cg_for23_typed(result.schedules.get("cg"), typed_input)
+    stcg = block["ShortTermCapGainFor23"]
+    assert stcg["AmtDeemedStcg"] == 75000
+    assert "UnutilizedCg" not in stcg
+
+
+def test_unutilized_ltcg_wider_section_set_and_requires_amt_utilized() -> None:
+    """54 is valid for the LTCG table but NOT the STCG table -- confirms
+    the two tables' enums are genuinely different, not shared."""
+    from app.schemas.itr3 import ITR3UnutilizedCGRow
+
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input = typed_input.model_copy(update={
+        "cg_ltcg_unutilized_flag": "Y",
+        "cg_ltcg_unutilized_deposits": [
+            ITR3UnutilizedCGRow(prev_year_transferred="2022-23", section_claimed="54", amount_utilized=Decimal("200000"), amount_unutilized=Decimal("100000")),
+        ],
+    })
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    cg = document["ITR"]["ITR3"]["ScheduleCGFor23"]
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
+    assert not errors, "\n".join(e.message for e in errors)
+    ltcg = cg["LongTermCapGain23"]
+    assert ltcg["AmtDeemedLtcg"] == 100000
+    row = ltcg["UnutilizedCg"]["UnutilizedCgPrvYrDtls"][0]
+    assert row["SectionClmd"] == "54"
+    assert row["AmtUtilized"] == 200000
+
+
+def test_unutilized_defaults_to_n_flag_and_zero_when_no_data() -> None:
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    cg = document["ITR"]["ITR3"]["ScheduleCGFor23"]
+    assert cg["ShortTermCapGainFor23"]["UnutilizedStcgFlag"] == "N"
+    assert cg["ShortTermCapGainFor23"]["AmtDeemedStcg"] == 0
+    assert "UnutilizedCg" not in cg["ShortTermCapGainFor23"]
+    assert cg["LongTermCapGain23"]["UnutilizedLtcgFlag"] == "N"
 
 
 # ---------------------------------------------------------------------------
