@@ -656,6 +656,9 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
             perquisite_nature_rows=[{"NatureDesc": r.natureCode, "OthNatOfInc": r.otherDescription, "OthAmount": r.amount} for r in e.perquisiteNatureRows],
             profit_in_lieu_nature_rows=[{"NatureDesc": r.natureCode, "OthNatOfInc": r.otherDescription, "OthAmount": r.amount} for r in e.profitInLieuNatureRows],
             notified_89a_country_rows=e.incomeNotified89ACountryRows,
+            rent_paid=e.rentPaid,
+            is_metro_city=e.isMetroCity,
+            section10_exemption_rows=[{"SalNatureDesc": r.natureCode, "SalOthNatOfInc": r.otherDescription, "SalOthAmount": r.amount} for r in e.section10ExemptionRows],
         ) for e in draft.employers] or None,
         schedule_hp_properties=[ITR3ScheduleHPProperty(
             sequence_no=p.propertySequenceNo or i,

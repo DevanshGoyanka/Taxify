@@ -1727,6 +1727,13 @@ class ITR3ScheduleSEmployer(BaseModel):
     perquisite_nature_rows: list[dict[str, Any]] = Field(default_factory=list)
     profit_in_lieu_nature_rows: list[dict[str, Any]] = Field(default_factory=list)
     notified_89a_country_rows: list[dict[str, Any]] = Field(default_factory=list)
+    # Section 10(13A) HRA source facts (form item 3's own dedicated
+    # sub-schedule) and the itemized Section 10 exemption rows the frontend
+    # captures per employer (EmployerEntryManager.tsx's own dropdown+amount
+    # editor) -- both previously captured nowhere on this typed row at all.
+    rent_paid: Decimal = Decimal("0")
+    is_metro_city: bool = False
+    section10_exemption_rows: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ITR3ScheduleHPProperty(BaseModel):

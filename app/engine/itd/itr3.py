@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from app.engine.calculators.itr3 import ITR3Result
 from app.schemas.itr3 import ITR3Input
+from app.engine.common.hra import compute_hra_exemption
 from app.engine.itd.common import (
     _to_rupees,
     _to_rupees_rounded10,
@@ -1368,6 +1369,26 @@ def _schedule_cfl(result: ITR3Result, typed_input: ITR3Input | None = None) -> d
     return output
 
 
+# Maps a SalaryResult per-exemption field to its official Section 10
+# sub-clause enum value and a human-readable label, for AllwncExemptUs10Dtls.
+# Ported from the identical, live-verified mapping in itd/itr2.py -- the
+# same app/engine/schedules/salary.py::SalaryResult dataclass backs both
+# forms. 10(13A) (HRA) is deliberately excluded -- it has its own dedicated
+# Section10_13A structure below, not this generic array.
+_ITR3_SALARY_EXEMPTION_ROWS: tuple[tuple[str, str, str], ...] = (
+    ("lta_exempt", "10(5)", "Leave travel allowance"),
+    ("gratuity_exempt", "10(10)", "Gratuity"),
+    ("commuted_pension_exempt", "10(10A)", "Commuted pension"),
+    ("leave_encashment_exempt", "10(10AA)", "Leave encashment"),
+    ("retrenchment_exempt", "10(10B)(i)", "Retrenchment compensation"),
+    ("vrs_exempt", "10(10C)", "Voluntary retirement compensation"),
+    ("transport_exempt", "10(14)(ii)", "Transport allowance"),
+    ("children_education_exempt", "10(14)(ii)", "Children education allowance"),
+    ("hostel_exempt", "10(14)(ii)", "Hostel expenditure allowance"),
+    ("uniform_allowance_exempt", "10(14)(i)", "Uniform allowance"),
+)
+
+
 def _schedule_s(result: ITR3Result, typed_input: ITR3Input | None = None) -> dict | None:
     """Serialize explicitly prepared employer rows into official Schedule S."""
     if typed_input is None or not typed_input.schedule_s_employers:
@@ -1443,6 +1464,70 @@ def _schedule_s(result: ITR3Result, typed_input: ITR3Input | None = None) -> dic
             "TotIncUnderHeadSalaries": _to_rupees(total_income)}
     if relief_89a:
         schedule_s["Increliefus89A"] = relief_89a
+
+    # Item 3's own itemized breakdown (AllwncExemptUs10Dtls): the statutory
+    # per-exemption amounts the shared salary calculator already computed
+    # (gratuity/pension/leave-encashment/retrenchment/VRS/transport/CEA/
+    # hostel/uniform -- everything except HRA, which has its own dedicated
+    # Section10_13A block below), plus any itemized Section 10 rows a
+    # taxpayer entered directly per employer. "OTH" has no official schema
+    # code for this array -- fail closed rather than emit an invalid row.
+    frontend_section10_rows: list[dict[str, Any]] = []
+    for employer in employers:
+        for section10_row in employer.section10_exemption_rows:
+            amount = section10_row.get("SalOthAmount", 0)
+            if not amount or amount <= 0:
+                continue
+            code = section10_row.get("SalNatureDesc")
+            if code == "OTH":
+                raise ValueError(
+                    f"Schedule S employer {employer.employer_name!r}: Section 10 exemption row uses "
+                    "code \"OTH\", which has no official ITD schema code -- select a specific "
+                    "Section 10 sub-clause instead."
+                )
+            frontend_section10_rows.append({
+                "SalNatureDesc": code,
+                "SalOthNatOfInc": section10_row.get("SalOthNatOfInc"),
+                "SalOthAmount": _to_rupees(Decimal(str(amount))),
+            })
+    exemption_rows = [
+        {"SalNatureDesc": code, "SalOthNatOfInc": label, "SalOthAmount": _to_rupees(amount)}
+        for field, code, label in _ITR3_SALARY_EXEMPTION_ROWS
+        if (amount := getattr(salary_schedule, field, zero)) > zero
+    ] + frontend_section10_rows
+    if exemption_rows:
+        schedule_s["AllwncExemptUs10"] = {"AllwncExemptUs10Dtls": exemption_rows}
+
+    # Section 10(13A) HRA sub-schedule (form item 3's own dedicated block).
+    # Aggregated across employers the same way the shared calculator
+    # (_map_salary) aggregates its own per-employer HRA facts, then
+    # cross-checked against the calculator's own already-computed hra_exempt
+    # so the disclosure can never silently drift from the number actually
+    # used in the tax computation.
+    if len({e.is_metro_city for e in employers}) > 1:
+        raise ValueError("Schedule S Section 10(13A) cannot represent mixed metro and non-metro employers")
+    hra_received = sum((e.hra for e in employers), zero)
+    rent_paid = sum((e.rent_paid for e in employers), zero)
+    hra_salary = sum((e.basic + e.da for e in employers), zero)
+    is_metro = employers[0].is_metro_city
+    if typed_input.tax_regime.value == "new":
+        hra_received = rent_paid = hra_salary = zero
+    hra_result = compute_hra_exemption(
+        actual_hra_received=hra_received, rent_paid=rent_paid, salary=hra_salary, is_metro=is_metro,
+    )
+    sal_hra_exempt = getattr(salary_schedule, "hra_exempt", zero)
+    if _to_rupees(hra_result.exempt_amount) != _to_rupees(sal_hra_exempt) and sal_hra_exempt > zero:
+        raise ValueError("Schedule S Section 10(13A) exemption reconciliation failed")
+    if hra_result.exempt_amount > zero:
+        schedule_s["Section10_13A"] = {
+            "Placeofwork": "1" if is_metro else "2",
+            "ActlHRARecv": _to_rupees(hra_received),
+            "ActlRentPaid": _to_rupees(rent_paid),
+            "DtlsSalUsSec171": _to_rupees(hra_salary),
+            "ActlRentPaid10Per": _to_rupees(hra_result.rent_minus_10pct_salary),
+            "Sal40Or50Per": _to_rupees(hra_result.salary_factor),
+            "EligbleExmpAllwncUs13A": _to_rupees(hra_result.exempt_amount),
+        }
     return schedule_s
 
 

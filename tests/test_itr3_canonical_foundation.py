@@ -1280,3 +1280,88 @@ def test_itr3_compute_entrypoint_sets_filing_date() -> None:
     pipeline = compute_canonical_itr3(_draft_with_business())
     assert pipeline.typed_input.filing_date is not None
     assert pipeline.typed_input.filing_date.isoformat() == "2026-07-31"
+
+
+def test_itr3_schedule_s_hra_and_section10_rows_reach_json() -> None:
+    """Schedule 12: Section10_13A (HRA, form item 3) and the itemized
+    AllwncExemptUs10Dtls breakdown (also item 3) were both entirely absent
+    from the builder despite the underlying facts (HRA/rent/metro, and a
+    frontend-captured Section 10 exemption row) already being captured on
+    the draft's own Employer model."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+    from app.schemas.return_draft import Employer, SalaryNatureRow
+
+    draft = _draft_with_business()
+    draft.regime = "old"
+    draft.employers = [Employer(
+        employerName="Acme Corp", natureOfEmployment="OTH",
+        employerAddress="1 MG Road", employerCity="Bengaluru",
+        employerStateCode="29", employerPinCode="560001",
+        basic=Decimal("600000"), da=Decimal("0"), hra=Decimal("240000"),
+        rentPaid=Decimal("300000"), isMetroCity=False, city="Bengaluru",
+        section10ExemptionRows=[SalaryNatureRow(natureCode="10(10CC)", otherDescription="Tax on perquisites", amount=Decimal("5000"))],
+    )]
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    schedule_s = document["ITR"]["ITR3"]["ScheduleS"]
+
+    # HRA: least of (240000, 300000 - 60000, 600000*0.4) = least of (240000, 240000, 240000)
+    assert schedule_s["Section10_13A"]["ActlHRARecv"] == 240000
+    assert schedule_s["Section10_13A"]["ActlRentPaid"] == 300000
+    assert schedule_s["Section10_13A"]["DtlsSalUsSec171"] == 600000
+    assert schedule_s["Section10_13A"]["Placeofwork"] == "2"
+    assert schedule_s["Section10_13A"]["ActlRentPaid10Per"] == 240000
+    assert schedule_s["Section10_13A"]["Sal40Or50Per"] == 240000
+    assert schedule_s["Section10_13A"]["EligbleExmpAllwncUs13A"] == 240000
+
+    assert schedule_s["AllwncExemptUs10"]["AllwncExemptUs10Dtls"] == [
+        {"SalNatureDesc": "10(10CC)", "SalOthNatOfInc": "Tax on perquisites", "SalOthAmount": 5000}
+    ]
+    _validate_against_schema_definition(schedule_s, "ScheduleS")
+
+
+def test_itr3_schedule_s_omits_section10_13a_when_no_genuine_hra_claim() -> None:
+    """Section10_13A must be omitted entirely (not a zero-filled placeholder)
+    when no genuine HRA exemption exists -- matching the live-UAT-verified
+    ITR-2 precedent (2026-09-14, PAN GOYPT2026A): ITD's real validator
+    treats the block's mere PRESENCE as an active 10(13A) claim, rejecting
+    it outright for a new-regime return regardless of the amounts inside."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+    from app.schemas.return_draft import Employer
+
+    draft = _draft_with_business()
+    draft.employers = [Employer(
+        employerName="Acme Corp", natureOfEmployment="OTH",
+        employerAddress="1 MG Road", employerCity="Bengaluru",
+        employerStateCode="29", employerPinCode="560001",
+        basic=Decimal("600000"), city="Bengaluru",
+    )]
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    schedule_s = document["ITR"]["ITR3"]["ScheduleS"]
+    assert "Section10_13A" not in schedule_s
+    assert "AllwncExemptUs10" not in schedule_s
+    _validate_against_schema_definition(schedule_s, "ScheduleS")
+
+
+def test_itr3_schedule_s_rejects_oth_section10_exemption_code() -> None:
+    """AllwncExemptUs10Dtls has no official 'other' enum bucket -- a
+    frontend-captured row using the catch-all "OTH" code must fail closed
+    rather than reach the JSON with an invalid schema value."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+    from app.schemas.return_draft import Employer, SalaryNatureRow
+
+    draft = _draft_with_business()
+    draft.employers = [Employer(
+        employerName="Acme Corp", natureOfEmployment="OTH",
+        employerAddress="1 MG Road", employerCity="Bengaluru",
+        employerStateCode="29", employerPinCode="560001",
+        basic=Decimal("600000"), city="Bengaluru",
+        section10ExemptionRows=[SalaryNatureRow(natureCode="OTH", otherDescription="Misc", amount=Decimal("1000"))],
+    )]
+    typed_input, _ = draft_to_itr3_input(draft)
+    with pytest.raises(ValueError, match="OTH"):
+        build_itr3_json(compute_itr3(typed_input), typed_input)
