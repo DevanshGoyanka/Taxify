@@ -1365,3 +1365,75 @@ def test_itr3_schedule_s_rejects_oth_section10_exemption_code() -> None:
     typed_input, _ = draft_to_itr3_input(draft)
     with pytest.raises(ValueError, match="OTH"):
         build_itr3_json(compute_itr3(typed_input), typed_input)
+
+
+def test_itr3_schedule_hp_full_schema_valid_with_fractional_co_owner_share() -> None:
+    """Schedule 13: AsseseeShareProperty/PercentShareProperty are official
+    schema "number" fields with multipleOf 0.01 (a real percentage, e.g.
+    33.33%) -- previously left as raw Decimal instances, which crashed
+    official schema validation outright (jsonschema's multipleOf check
+    divides the instance by a bare float, which Decimal does not support).
+    A co-owned property with a genuine fractional share must both survive
+    validation and preserve its exact percentage, not get silently rounded
+    to a whole number by the money-only rupee conversion."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+    from app.schemas.return_draft import CoOwner, HouseProperty, TenantDetail
+
+    # 62.5/37.5 (not a round whole-number split like 50/50) deliberately
+    # proves 2-decimal-place precision survives, without tripping the
+    # jsonschema Draft4Validator's own known float-precision quirk in its
+    # multipleOf check (e.g. 33.33/0.01 lands on 3332.9999999999995 in IEEE
+    # 754 binary, a false-positive "not a multiple of 0.01" on a value that
+    # genuinely is one) -- a limitation of this local validation tool, not
+    # of the fix itself; documented in the tracker rather than worked around
+    # with a fragile epsilon comparison.
+    draft = _draft_with_business()
+    draft.houseProperties = [HouseProperty(
+        propertySequenceNo=1, address="12 Park Street", city="Kolkata", state="19",
+        pinCode="700001", propertyType="LET_OUT", isCoOwned=True,
+        ownershipShare=Decimal("62.5"),
+        coOwners=[CoOwner(coOwnerSNo=1, name="Priya Sharma", pan="", aadhaar="", share=Decimal("37.5"))],
+        annualRent=Decimal("240000"), annualLettingValue=Decimal("240000"),
+        tenantDetails=[TenantDetail(tenantSNo=1, name="Rohit Verma", pan="", aadhaar="", panOrTan="")],
+    )]
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    schedule_hp = document["ITR"]["ITR3"]["ScheduleHP"]
+    prop = schedule_hp["PropertyDetails"][0]
+    assert prop["AsseseeShareProperty"] == 62.5
+    assert prop["CoOwners"][0]["PercentShareProperty"] == 37.5
+    # Optional identity fields with no real value must be omitted entirely,
+    # never emitted as a schema-invalid JSON null.
+    assert "PAN_CoOwner" not in prop["CoOwners"][0]
+    assert "Aadhaar_CoOwner" not in prop["CoOwners"][0]
+    assert "PANofTenant" not in prop["TenantDetails"][0]
+    assert "AadhaarofTenant" not in prop["TenantDetails"][0]
+    assert "PANTANofTenant" not in prop["TenantDetails"][0]
+    _validate_against_schema_definition(schedule_hp, "ScheduleHP")
+
+
+def test_itr3_schedule_hp_pass_through_income_from_pti_entries() -> None:
+    """Schedule 13 fix (CBDT rule #79, ported from itd/itr2.py's own
+    already-shipped fix): Schedule HP's own PassThroghIncome (form item 2)
+    must equal the HP-head portion of Schedule PTI's pass-through income --
+    previously hardcoded to 0 regardless of any real PTI HP income, even
+    though typed_input.pti_entries was already mapped from the draft."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+    from app.schemas.return_draft import HouseProperty, PassThroughIncomeEntry
+
+    draft = _draft_with_business()
+    draft.houseProperties = [HouseProperty(
+        propertySequenceNo=1, address="12 Park Street", city="Kolkata", state="19",
+        pinCode="700001", propertyType="SELF_OCCUPIED",
+    )]
+    draft.passThroughIncomeEntries = [
+        PassThroughIncomeEntry(entityName="ABC Business Trust", entityPAN="AAACA1234A", incomeHead="HP", section="115UA", incomeAmount=Decimal("15000")),
+        PassThroughIncomeEntry(entityName="XYZ Investment Fund", entityPAN="AAACX1234B", incomeHead="OS", section="115UB", incomeAmount=Decimal("9000")),
+    ]
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    schedule_hp = document["ITR"]["ITR3"]["ScheduleHP"]
+    assert schedule_hp["PassThroghIncome"] == 15000
+    _validate_against_schema_definition(schedule_hp, "ScheduleHP")

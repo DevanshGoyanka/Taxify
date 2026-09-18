@@ -1746,22 +1746,27 @@ class ITR3ScheduleHPProperty(BaseModel):
     country_code: str = "91"
     pin_code: str | None = None
     zip_code: str | None = None
-    property_owner: str = "SE"
+    # Official enum: SE (Self)/MI (Minor)/SP (Spouse)/OT (Other).
+    property_owner: Literal["SE", "MI", "SP", "OT"] = "SE"
     property_owner_other: str | None = None
     co_owned: bool = False
-    assessee_share_percent: Decimal = Decimal("100")
-    property_type: str = "S"
-    annual_lettable_value: Decimal = Decimal("0")
-    rent_not_realized: Decimal = Decimal("0")
-    local_taxes: Decimal = Decimal("0")
+    assessee_share_percent: Decimal = Field(default=Decimal("100"), ge=0, le=100)
+    # Official enum: L (Let Out)/D (Deemed Let Out)/S (Self Occupied).
+    property_type: Literal["L", "D", "S"] = "S"
+    annual_lettable_value: Decimal = Field(default=Decimal("0"), ge=0)
+    rent_not_realized: Decimal = Field(default=Decimal("0"), ge=0)
+    local_taxes: Decimal = Field(default=Decimal("0"), ge=0)
+    # No official minimum: item 1f (own-share of the annual value) can be
+    # negative independent of item 1e's own non-negativity.
     annual_value_owned: Decimal = Decimal("0")
-    standard_deduction: Decimal = Decimal("0")
-    interest_on_loan: Decimal = Decimal("0")
+    standard_deduction: Decimal = Field(default=Decimal("0"), ge=0)
+    interest_on_loan: Decimal = Field(default=Decimal("0"), ge=0)
+    # No official minimum: a let-out property can genuinely show a loss.
     income_of_hp: Decimal = Decimal("0")
     # Form item 1j -- arrears/unrealised rent received during the year, RAW
     # amount (the 30% Section 25A reduction is applied by the calculator,
     # not pre-applied here).
-    arrears_unrealised_rent: Decimal = Decimal("0")
+    arrears_unrealised_rent: Decimal = Field(default=Decimal("0"), ge=0)
     home_loan_details: list[dict[str, Any]] = Field(default_factory=list)
     co_owner_details: list[dict[str, Any]] = Field(default_factory=list)
     tenant_details: list[dict[str, Any]] = Field(default_factory=list)

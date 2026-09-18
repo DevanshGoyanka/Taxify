@@ -1593,16 +1593,55 @@ def _schedule_hp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
         prop: dict[str, Any] = {"HPSNo": source.sequence_no, "AddressDetailWithZipCode": address,
                                 "PropertyOwner": source.property_owner,
                                 "PropCoOwnedFlg": "YES" if source.co_owned else "NO",
-                                "AsseseeShareProperty": source.assessee_share_percent,
+                                # AsseseeShareProperty is a percentage (schema type
+                                # "number", multipleOf 0.01) -- left as a raw Decimal,
+                                # this crashes official schema validation outright
+                                # (jsonschema's multipleOf check divides by a bare
+                                # float, which Decimal does not support) for every
+                                # property row, co-owned or not.
+                                "AsseseeShareProperty": float(source.assessee_share_percent),
                                 "ifLetOut": source.property_type, "Rentdetails": rent}
         if source.property_owner == "OT" and source.property_owner_other:
             prop["PropertyOwnerOther"] = source.property_owner_other
         if source.co_owner_details:
-            prop["CoOwners"] = _official_integer_tree(source.co_owner_details)
+            # PercentShareProperty is the same percentage type as
+            # AsseseeShareProperty above -- must not go through
+            # _official_integer_tree, which would force it through the
+            # money-only _to_rupees() rounding (silently truncating a real
+            # 33.33% share to 33). Optional PAN/Aadhaar fields are omitted
+            # entirely when absent, not emitted as a schema-invalid null.
+            prop["CoOwners"] = [
+                {k: v for k, v in {
+                    "CoOwnersSNo": co.get("CoOwnersSNo"),
+                    "NameCoOwner": co.get("NameCoOwner"),
+                    "PAN_CoOwner": co.get("PAN_CoOwner"),
+                    "Aadhaar_CoOwner": co.get("Aadhaar_CoOwner"),
+                    "PercentShareProperty": float(co["PercentShareProperty"]) if co.get("PercentShareProperty") is not None else None,
+                }.items() if v is not None}
+                for co in source.co_owner_details
+            ]
         if source.tenant_details:
-            prop["TenantDetails"] = _official_integer_tree(source.tenant_details)
+            prop["TenantDetails"] = [
+                {k: v for k, v in {
+                    "TenantSNo": t.get("TenantSNo"),
+                    "NameofTenant": t.get("NameofTenant"),
+                    "PANofTenant": t.get("PANofTenant"),
+                    "AadhaarofTenant": t.get("AadhaarofTenant"),
+                    "PANTANofTenant": t.get("PANTANofTenant"),
+                }.items() if v is not None}
+                for t in source.tenant_details
+            ]
         properties.append(prop)
-    return {"PropertyDetails": properties, "PassThroghIncome": 0,
+    # CBDT rule #79 ("Sch HP Sl.2 pass-through income = HP income in
+    # Schedule PTI"), ported from the identical, already-shipped fix in
+    # itd/itr2.py -- typed_input.pti_entries already exists and is already
+    # mapped from draft.passThroughIncomeEntries (see draft_to_itr3_input.py),
+    # so this reads data already present on typed_input rather than pulling
+    # ahead into Schedule PTI's own (separately tracked, not yet closed) work.
+    pti_hp_income = sum(
+        (p.income_amount for p in (typed_input.pti_entries or []) if p.income_head == "HP"), Decimal("0"),
+    )
+    return {"PropertyDetails": properties, "PassThroghIncome": _to_rupees(pti_hp_income),
             "TotalIncomeChargeableUnHP": _to_rupees(result.house_property_income)}
 
 
