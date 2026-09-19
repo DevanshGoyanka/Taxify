@@ -60,7 +60,7 @@ from app.engine.itd.itr3_schema import get_itr3_schema_validator
 from app.engine.draft_to_itr3_input import draft_to_itr3_input, _map_slump_sale
 from app.engine.calculators.itr3 import compute as compute_itr3
 from app.engine.itd.itr3 import build_itr3_json, _schedule_cg_for23_typed, _slump_sale_block
-from app.schemas.itr2 import CapitalGainExemptionClaim, CGTransaction, CGAssetType
+from app.schemas.itr2 import CapitalGainExemptionClaim, CG112AScrip, CGTransaction, CGAssetType
 from app.schemas.itr3 import ITR3SlumpSaleRow
 from app.schemas.return_draft import PassThroughIncomeEntry
 
@@ -574,4 +574,109 @@ def test_pti_ltcg_112a_and_other_combined_into_single_12_5_bucket() -> None:
     assert cg["CurrYrLosses"]["InLtcg12_5Per"]["CurrYearIncome"] == 100000
     assert cg["CurrYrLosses"]["InLtcgDTAARate"]["CurrYearIncome"] == 0
     errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Tracker row #21 -- Schedule 112A: ordinary cg_transactions previously
+# never reached the schedule at all, only explicit cg_112a_scrips rows
+# ---------------------------------------------------------------------------
+
+def _112a_scrip(**overrides) -> CG112AScrip:
+    from datetime import date as _dt
+    values = dict(
+        isin_code="INNOTREQUIRD", share_unit_name="Example Fund", is_before_31jan2018=True,
+        date_of_acquisition=_dt(2015, 1, 1), date_of_transfer=_dt(2026, 1, 1),
+        num_shares_units=Decimal("100"), sale_price_per_share=Decimal("2000"),
+        total_sale_value=Decimal("200000"), cost_acq_without_index=Decimal("50000"),
+        fmv_per_share=Decimal("500"), total_fmv=Decimal("50000"),
+    )
+    values.update(overrides)
+    return CG112AScrip(**values)
+
+
+def test_112a_ordinary_transaction_reaches_schedule_previously_omitted() -> None:
+    """A 112A-classified gain entered through the generic capital-gains
+    transaction editor (the most common real-world entry path) previously
+    never reached Schedule112A's own disclosure at all -- only the
+    dedicated `cg_112a_scrips` per-scrip editor did, even though the
+    calculator's own tax computation already correctly included ordinary
+    transactions via `ltcg_112a_assets`. Ported from ITR-2's own
+    `_112a_source_rows()`, confirmed live there (2026-09-13, Type-2 UAT
+    validateItr, PAN GOYPT2026A) for the identical defect."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.LISTED_EQUITY_112A,
+        full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("500000"),
+        fair_market_value_jan2018=Decimal("500000"),
+        date_of_acquisition=_dt(2015, 1, 1), date_of_transfer=_dt(2026, 1, 1),
+    )]
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    itr3_doc = document["ITR"]["ITR3"]
+    sched = itr3_doc.get("Schedule112A")
+    assert sched is not None
+    assert len(sched["Schedule112ADtls"]) == 1
+    assert sched["Balance112A"] == 1500000
+    errors = list(_schedule_validator("Schedule112A").iter_errors(sched))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_112a_explicit_scrip_still_reaches_schedule() -> None:
+    """No regression on the pre-existing, already-working explicit-scrip
+    path (`cg_112a_scrips`)."""
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_112a_scrips = [_112a_scrip()]
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    sched = document["ITR"]["ITR3"]["Schedule112A"]
+    assert len(sched["Schedule112ADtls"]) == 1
+    assert sched["Balance112A"] == 150000  # 200000 sale - 50000 cost (BE, no grandfathering delta)
+    errors = list(_schedule_validator("Schedule112A").iter_errors(sched))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_112a_explicit_scrip_and_ordinary_transaction_both_counted_no_double_count() -> None:
+    """The union of `cg_112a_scrips` and 112A-eligible `cg_transactions`
+    must produce exactly one row each, summed correctly -- neither source
+    silently drops the other, and no double-counting occurs."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_112a_scrips = [_112a_scrip()]
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.LISTED_EQUITY_112A,
+        full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("500000"),
+        fair_market_value_jan2018=Decimal("500000"),
+        date_of_acquisition=_dt(2015, 1, 1), date_of_transfer=_dt(2026, 1, 1),
+    )]
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    sched = document["ITR"]["ITR3"]["Schedule112A"]
+    assert len(sched["Schedule112ADtls"]) == 2
+    assert sched["Balance112A"] == 150000 + 1500000
+    errors = list(_schedule_validator("Schedule112A").iter_errors(sched))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_112a_111a_long_held_transaction_reclassified_into_schedule() -> None:
+    """A `listed_equity_111a`-typed transaction actually held past the
+    12-month threshold is reclassified into the 112A LTCG basket for real
+    tax computation (matching ITR-2's own already-established rule) -- it
+    must reach Schedule112A's own disclosure too, not just the aggregate
+    tax figure."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.LISTED_EQUITY_111A,
+        full_consideration=Decimal("1000000"), cost_of_acquisition=Decimal("400000"),
+        date_of_acquisition=_dt(2020, 1, 1), date_of_transfer=_dt(2026, 1, 1),
+    )]
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    sched = document["ITR"]["ITR3"].get("Schedule112A")
+    assert sched is not None
+    assert len(sched["Schedule112ADtls"]) == 1
+    assert sched["Balance112A"] == 600000
+    errors = list(_schedule_validator("Schedule112A").iter_errors(sched))
     assert not errors, "\n".join(e.message for e in errors)

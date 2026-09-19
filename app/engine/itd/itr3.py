@@ -55,6 +55,7 @@ from app.engine.itd.itr2 import (
     _exemption_or_dedn_us54_block as _itr2_exemption_or_dedn_us54_block,
     _nri_proviso_48 as _itr2_nri_proviso_48,
     _nri_foreign_asset as _itr2_nri_foreign_asset,
+    _112a_source_rows as _itr2_112a_source_rows,
 )
 from app.engine.itd.cg_shared import (
     build_equity_mf_stt_rows,
@@ -1873,36 +1874,104 @@ def _legacy_schedule_os_placeholder_removed() -> None:
 # ============================================================================
 
 
+def _itr3_112a_style_schedule(source_rows: list[dict[str, Any]], suffix: str) -> dict | None:
+    """Build a Schedule112A- or Schedule115AD-shaped object from source
+    rows -- ITR-3's own version of ITR-2's `_112a_style_schedule()`
+    (per-row formula logic ported verbatim, confirmed identical against
+    the official ITR-3 form PDF's own Schedule 112A / Schedule
+    115AD(1)(b)(iii) proviso tables directly: both are the SAME 14-column
+    layout, Col.7 "Cost of acquisition without indexation" = higher of
+    Col.8/Col.9 (the grandfathering formula -> `CostAcqWithoutIndx`),
+    Col.8 "Cost of acquisition" = the plain input cost -> `AcquisitionCost`,
+    Col.14 "Balance (6-13)" -> `Balance`). Deliberately NOT a direct call
+    to ITR-2's own `_112a_style_schedule()` -- confirmed via direct schema
+    introspection that ITR-2's `Schedule112A`/`Schedule115AD` definitions
+    have an extra `TotalBalance112A`/`TotalBalance115AD` field ITR-3's own
+    schema definitions genuinely do NOT have (`additionalProperties:
+    false`, so including it would fail schema validation) -- a real,
+    confirmed form/schema divergence, not assumed.
+    """
+    if not source_rows:
+        return None
+    rows = []
+    for item in source_rows:
+        deemed_cost = item["cost"]
+        if item["is_before"]:
+            deemed_cost = max(item["cost"], min(item["fmv"], item["sale"]))
+        deductions = deemed_cost + item["expense"]
+        balance = item["balance"] if item["balance"] is not None else item["sale"] - deductions
+        is_before = item["is_before"]
+        rows.append({
+            "ShareOnOrBefore": "BE" if is_before else "AE",
+            "ISINCode": item["isin"],
+            "ShareUnitName": item["name"] if is_before else "CONSOLIDATED",
+            "NumSharesUnits": float(item["quantity"]) if is_before else 0.0,
+            "SalePricePerShareUnit": float(item["price"]) if is_before else 0.0,
+            "TotSaleValue": _to_rupees(item["sale"]),
+            "CostAcqWithoutIndx": _to_rupees(deemed_cost),
+            "AcquisitionCost": float(item["cost"]),
+            "LTCGBeforelower6and11": _to_rupees(max(Decimal("0"), item["sale"] - item["cost"])),
+            "FairMktValuePerShareunit": float(item["fmv_per_unit"]) if is_before else 0.0,
+            "TotFairMktValueCapAst": _to_rupees(item["fmv"]) if is_before else 0,
+            "ExpExclCnctTransfer": float(item["expense"]),
+            "TotalDeductions": _to_rupees(deductions),
+            "Balance": _to_rupees(balance),
+        })
+    sale = sum(r["TotSaleValue"] for r in rows)
+    deemed_cost_total = sum(r["CostAcqWithoutIndx"] for r in rows)
+    plain_cost_total = sum(Decimal(str(r["AcquisitionCost"])) for r in rows)
+    fmv = sum(r["TotFairMktValueCapAst"] for r in rows)
+    expenses = sum(Decimal(str(r["ExpExclCnctTransfer"])) for r in rows)
+    deductions_total = sum(r["TotalDeductions"] for r in rows)
+    balance_total = sum(r["Balance"] for r in rows)
+    # Sum the rows' own (already row-clamped) LTCGBeforelower6and11 values,
+    # not a bucket-level max(0, sale-cost) recomputation -- matches
+    # ITR-2's own `_112a_style_schedule()` docstring reasoning exactly
+    # (mixed gain/loss scrips give a different, correct total this way).
+    ltcg_before_lower_6and11 = sum(r["LTCGBeforelower6and11"] for r in rows)
+    return {
+        f"Schedule{suffix}Dtls": rows,
+        f"SaleValue{suffix}": sale,
+        f"CostAcqWithoutIndx{suffix}": deemed_cost_total,
+        f"AcquisitionCost{suffix}": _to_rupees(plain_cost_total),
+        f"LTCGBeforelowerB1B2{suffix}": ltcg_before_lower_6and11,
+        f"FairMktValueCapAst{suffix}": fmv,
+        f"ExpExclCnctTransfer{suffix}": _to_rupees(expenses),
+        f"Deductions{suffix}": deductions_total,
+        f"Balance{suffix}": balance_total,
+    }
+
+
 def _schedule_112a_115ad(typed_input: ITR3Input | None, suffix: str) -> dict | None:
-    """Serialize prepared typed 112A/115AD rows with official nesting."""
+    """Serialize Schedule112A/Schedule115AD from explicit scrips PLUS any
+    112A-eligible ordinary `cg_transactions` -- previously sourced ONLY
+    from `cg_112a_scrips`/`cg_115ad_scrips`, silently omitting every
+    112A-classified gain entered through the generic capital-gains
+    transaction editor (the most common real-world entry path), even
+    though the calculator's own tax computation already correctly
+    includes them via `ltcg_112a_assets`. This is the exact defect ITR-2's
+    own `_112a_source_rows()` was built to fix, confirmed live there
+    (2026-09-13, Type-2 UAT validateItr, PAN GOYPT2026A) -- reused
+    directly here (fully generic, operates on the shared `CGTransaction`/
+    `CG112AScrip` schema types both forms import from `app/schemas/itr2.py`,
+    no ITR-2-specific concept inside it) rather than re-derived.
+
+    Schedule 112A (resident) and Schedule 115AD(1)(b)(iii) proviso
+    (non-resident FII/FPI) are mutually exclusive per the official form's
+    own text ("For NON-RESIDENTS" heading on the 115AD table) -- dispatched
+    on `is_fii_fpi`, matching ITR-2's own `_schedule_112a()`/
+    `_schedule_115ad()` split, even though a genuine ITR-3 filer
+    (individual/HUF with business income) is never actually FII/FPI in
+    practice (see this file's own established note on `equity_111a_rows`).
+    """
     if typed_input is None:
         return None
-    rows = typed_input.cg_115ad_scrips if suffix == "115AD" else typed_input.cg_112a_scrips
-    if not rows:
+    is_fii_fpi = bool(typed_input.is_fii_fpi)
+    if (suffix == "115AD") != is_fii_fpi:
         return None
-    details = []
-    for item in rows:
-        before = item.is_before_31jan2018
-        deemed = max(item.cost_acq_without_index, min(item.total_sale_value, item.total_fmv)) if before else item.cost_acq_without_index
-        deductions = deemed + item.expenditure_on_transfer
-        balance = item.balance if item.balance is not None else item.total_sale_value - deductions
-        details.append({"ShareOnOrBefore": "BE" if before else "AE", "ISINCode": item.isin_code,
-            "ShareUnitName": item.share_unit_name if before else "CONSOLIDATED",
-            "NumSharesUnits": float(item.num_shares_units) if before else 0.0,
-            "SalePricePerShareUnit": float(item.sale_price_per_share) if before else 0.0,
-            "TotSaleValue": _to_rupees(item.total_sale_value), "CostAcqWithoutIndx": _to_rupees(deemed),
-            "AcquisitionCost": float(item.cost_acq_without_index), "LTCGBeforelower6and11": _to_rupees(max(Decimal("0"), item.total_sale_value-item.cost_acq_without_index)),
-            "FairMktValuePerShareunit": float(item.fmv_per_share) if before else 0.0,
-            "TotFairMktValueCapAst": _to_rupees(item.total_fmv) if before else 0,
-            "ExpExclCnctTransfer": float(item.expenditure_on_transfer), "TotalDeductions": _to_rupees(deductions), "Balance": _to_rupees(balance)})
-    tag = suffix
-    return {f"Schedule{tag}Dtls": details, f"SaleValue{tag}": sum(r["TotSaleValue"] for r in details),
-        f"CostAcqWithoutIndx{tag}": sum(r["CostAcqWithoutIndx"] for r in details),
-        f"AcquisitionCost{tag}": _to_rupees(sum((item.cost_acq_without_index for item in rows), Decimal("0"))),
-        f"LTCGBeforelowerB1B2{tag}": sum(r["LTCGBeforelower6and11"] for r in details),
-        f"FairMktValueCapAst{tag}": sum(r["TotFairMktValueCapAst"] for r in details),
-        f"ExpExclCnctTransfer{tag}": _to_rupees(sum((item.expenditure_on_transfer for item in rows), Decimal("0"))),
-        f"Deductions{tag}": sum(r["TotalDeductions"] for r in details), f"Balance{tag}": sum(r["Balance"] for r in details)}
+    explicit_scrips = [*typed_input.cg_112a_scrips, *typed_input.cg_115ad_scrips]
+    source_rows = _itr2_112a_source_rows(explicit_scrips, typed_input.cg_transactions or [])
+    return _itr3_112a_style_schedule(source_rows, suffix)
 
 
 def _schedule_vda_typed(typed_input: ITR3Input | None) -> dict | None:
