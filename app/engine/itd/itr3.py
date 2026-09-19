@@ -56,6 +56,7 @@ from app.engine.itd.itr2 import (
     _nri_proviso_48 as _itr2_nri_proviso_48,
     _nri_foreign_asset as _itr2_nri_foreign_asset,
     _112a_source_rows as _itr2_112a_source_rows,
+    _equity_share_112a as _equity_share_112a_zero,
 )
 from app.engine.itd.cg_shared import (
     build_equity_mf_stt_rows,
@@ -2277,6 +2278,20 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         raise ValueError("ScheduleCGFor23 requires typed ITR3Input")
     if cg_result is None:
         raise ValueError("ScheduleCGFor23 requires a computed capital-gains result")
+    # Item B4 ("SaleOfEquityShareUs112A", resident) vs item B7
+    # ("NRISaleOfEquityShareUs112A", FII/FPI via 115AD(1)(b)(iii) proviso)
+    # are mutually exclusive, dispatched on `is_fii_fpi` -- matching
+    # ITR-2's own already-correct `_schedule_cg()` pattern
+    # (`"SaleOfEquityShareUs112A": _equity_share_112a() if is_fii_fpi else
+    # equity_share_112a_block`) and this same file's own newly-fixed
+    # `_schedule_112a_115ad()` dispatch (Schedule 112A/115AD themselves,
+    # tracker #21-22). `typed_input.is_fii_fpi` IS a real, user-settable
+    # ITR3Input field (mapped from `draft.filing.isFiiFpi`, already used
+    # elsewhere in this file for `FiiFpiFlag`/SEBI-registration gating) --
+    # a stale comment lower in this function once claimed ITR-3 has "no
+    # real filing-profile-level FII/FPI flag... unlike ITR-2", which is
+    # simply wrong (confirmed by direct grep); corrected in place below.
+    is_fii_fpi = bool(typed_input.is_fii_fpi)
     stcg = getattr(cg_result, "stcg", None)
     ltcg = getattr(cg_result, "ltcg", None)
     zero = Decimal("0")
@@ -2494,14 +2509,22 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         _UNUTILIZED_CG_LTCG_SECTIONS, require_amt_utilized=True,
     )
     # Schedule CG item A3 -- STCG on equity shares/equity-oriented fund
-    # units/business trust units, STT paid (s.111A). ITR-3 filers (
-    # individuals/HUF with business income) are never FII/FPI, so this is
-    # always MFSectionCode "1A", never the "5AD1biip" proviso -- unlike
-    # ITR-2, which has a real filing-profile-level FII/FPI flag.  Derived
-    # from the same shared cg_transactions the calculator's own A3 tax
-    # figure (stcg_111a_val, calculators/itr3.py) already uses, via the
-    # same helper ITR-2's builder uses, so the two forms can never
-    # silently diverge on this schedule's arithmetic.
+    # units/business trust units, STT paid (s.111A). Still unconditionally
+    # MFSectionCode "1A" (never the "5AD1biip" proviso) here -- NOTE this
+    # comment previously claimed ITR-3 "has no real filing-profile-level
+    # FII/FPI flag... unlike ITR-2", which is WRONG (`typed_input.is_fii_fpi`
+    # is real, see this function's own `is_fii_fpi` variable added when
+    # fixing tracker #21-22/B4-B7 below) -- left as a separate, genuinely
+    # unverified item rather than silently fixed here: item A4
+    # ("NRISecur115AD", FII non-112A securities) is ALSO still hardcoded
+    # zero regardless of `is_fii_fpi`, and both are architecturally
+    # unrelated to Schedule 112A/115AD's own per-scrip tables (unlike B4/B7,
+    # which the form explicitly cites as sourced FROM those schedules) --
+    # flagged for a dedicated future check, not expanded into this fix.
+    # Derived from the same shared cg_transactions the calculator's own A3
+    # tax figure (stcg_111a_val, calculators/itr3.py) already uses, via the
+    # same helper ITR-2's builder uses, so the two forms can never silently
+    # diverge on this schedule's arithmetic.
     equity_111a_rows = build_equity_mf_stt_rows(typed_input.cg_transactions or [], is_fii_fpi=False)
     stcg_block: dict[str, Any] = {
         "SaleofLandBuild": {"SaleofLandBuildDtls": stcg_rows},
@@ -2528,8 +2551,21 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         # simply never read here before. Matches ITR-2's own already-working
         # one-line wiring exactly (`itd/itr2.py`'s own `TotalExcessTax`).
         "SaleofLandBuild": {"SaleofLandBuildDtls": ltcg_rows, "TotalExcessTax": _to_rupees(getattr(ltcg, "total_excess_tax_112_1a", zero) if ltcg else zero), "TotalLTCGImmblPrprty": _to_rupees(sum((a.balance for a in ltcg_assets), zero))},
-        "SaleOfEquityShareUs112A": equity_112a,
-        "NRIProvisoSec48": _itr2_nri_proviso_48(typed_input), "NRISaleOfEquityShareUs112A": {"BalanceCG": 0, "DeductionUs54F": 0, "CapgainonAssets": 0}, "NRISaleofForeignAsset": _itr2_nri_foreign_asset(typed_input),
+        # B4 (resident) vs B7 (FII/FPI via 115AD(1)(b)(iii) proviso) are
+        # mutually exclusive, dispatched on `is_fii_fpi` -- matching
+        # ITR-2's own already-correct `_schedule_cg()` pattern exactly
+        # (`"SaleOfEquityShareUs112A": _equity_share_112a() if is_fii_fpi
+        # else equity_share_112a_block`). Previously B4 was unconditionally
+        # the real `equity_112a` data and B7 unconditionally zero,
+        # regardless of `is_fii_fpi` -- inconsistent with this same
+        # function's own `_schedule_112a_115ad()` (tracker #21-22), which
+        # DOES route the underlying scrip data to Schedule115AD (not
+        # Schedule112A) when `is_fii_fpi=True`: a taxpayer could otherwise
+        # end up with real numbers in Schedule115AD's own detail table
+        # while Schedule CG's B7 (which the form's own text says sources
+        # "Column 14 of Schedule 115AD(1)(b)(iii) proviso") stayed at zero.
+        "SaleOfEquityShareUs112A": _equity_share_112a_zero() if is_fii_fpi else equity_112a,
+        "NRIProvisoSec48": _itr2_nri_proviso_48(typed_input), "NRISaleOfEquityShareUs112A": equity_112a if is_fii_fpi else _equity_share_112a_zero(), "NRISaleofForeignAsset": _itr2_nri_foreign_asset(typed_input),
         **({"NRIOnSec112and115": {"NRIOnSec112and115Dtls": nri_112_115_rows}} if nri_112_115_rows else {}),
         "SaleofAssetNADtls": {"SaleofAssetNA": ltcg_other},
         "SlumpSaleInLtcgDtls": {"SlumpSaleInLtcg": ltcg_slump_sale_block},

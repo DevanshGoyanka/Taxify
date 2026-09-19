@@ -680,3 +680,33 @@ def test_112a_111a_long_held_transaction_reclassified_into_schedule() -> None:
     assert sched["Balance112A"] == 600000
     errors = list(_schedule_validator("Schedule112A").iter_errors(sched))
     assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_112a_b4_and_b7_dispatch_on_is_fii_fpi_consistently_with_schedule() -> None:
+    """Schedule CG's own B4 ("SaleOfEquityShareUs112A", resident) vs B7
+    ("NRISaleOfEquityShareUs112A", FII/FPI) must dispatch on `is_fii_fpi`
+    identically to `_schedule_112a_115ad()`'s own Schedule112A/Schedule115AD
+    dispatch (tracker #21-22) -- otherwise a taxpayer could have real
+    numbers in Schedule115AD's own detail table while B7 (which the form's
+    own text cites as sourced "Column 14 of Schedule 115AD(1)(b)(iii)
+    proviso") silently stayed at zero, and B4 kept showing the gain as if
+    it were an ordinary resident 112A gain."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.LISTED_EQUITY_112A,
+        full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("500000"),
+        fair_market_value_jan2018=Decimal("500000"),
+        date_of_acquisition=_dt(2015, 1, 1), date_of_transfer=_dt(2026, 1, 1),
+    )]
+    typed_input.is_fii_fpi = True
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    itr3_doc = document["ITR"]["ITR3"]
+    ltcg = itr3_doc["ScheduleCGFor23"]["LongTermCapGain23"]
+    assert ltcg["SaleOfEquityShareUs112A"] == {"BalanceCG": 0, "DeductionUs54F": 0, "CapgainonAssets": 0}
+    assert ltcg["NRISaleOfEquityShareUs112A"]["CapgainonAssets"] == 1500000
+    assert "Schedule112A" not in itr3_doc
+    assert itr3_doc["Schedule115AD"]["Balance115AD"] == 1500000
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(itr3_doc["ScheduleCGFor23"]))
+    assert not errors, "\n".join(e.message for e in errors)
