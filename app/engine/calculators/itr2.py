@@ -383,10 +383,14 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # was never added, incorrectly shrinking slab tax on unrelated income.
     # Uses gross_income (not gross_income - deductions) to match exactly
     # what compute_lottery()/compute_115bbe()/etc. below actually tax.
-    r.other_sources_income += sum(
+    # Tracked separately (not just added to the blended total) so the
+    # Section 57 general-deduction pool and CYLA's `non_salary_income`
+    # below can both correctly exclude it -- see their own comments.
+    os_special_rate_si_income = sum(
         (sie.gross_income for sie in input_data.si_entries if sie.section in _OS_HEAD_SI_SECTIONS),
         _ZERO,
     )
+    r.other_sources_income += os_special_rate_si_income
     # Income from owning/maintaining race horses (Schedule OS's own
     # "IncFromOwnHorse" sub-head) is slab-rate Other Sources income like any
     # other OS category, just disclosed separately in the official form.
@@ -417,14 +421,24 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         r.other_sources_income += racehorse_profit_in_os
     # Income from letting machinery/plant/furniture (Section 56(2)(ii)/(iii),
     # Schedule OS's "RentFromMachPlantBldgs") is ordinary slab-rate Other
-    # Sources income, added to GTI at its own gross amount here; amounts
-    # disallowed u/s 58 and deemed profits u/s 59 (a balancing charge on
-    # sale of assets used in the letting activity) add back to it -- these
-    # two are the only items genuinely specific to this sub-head.
+    # Sources income, added to GTI at its own gross amount here.
     if input_data.os_machinery_plant_rent:
-        ded = input_data.os_deductions
-        addbacks = (ded.amount_not_deductible_us58 + ded.profit_chargeable_us59) if ded else _ZERO
-        r.other_sources_income += input_data.os_machinery_plant_rent + addbacks
+        r.other_sources_income += input_data.os_machinery_plant_rent
+    # CORRECTION (2026-09-19): items 4/5 ("Amounts not deductible u/s 58"
+    # and "Profits chargeable to tax u/s 59") are standalone Schedule-OS
+    # lines, not sub-items of machinery/plant/furniture letting income --
+    # confirmed by the official form's own item numbering (items 4/5 sit
+    # alongside item 3's deductions, not nested under item 1c's rent).
+    # Previously gated behind `os_machinery_plant_rent` being nonzero, so a
+    # standalone balancing charge/disallowed amount with no letting income
+    # at all was disclosed in the JSON (`_schedule_os()`'s own
+    # `AmtNotDeductibleUs58`/`ProfitChargTaxUs59` fields, never gated this
+    # way) but silently never taxed -- a real understatement, and an item-6
+    # (`BalanceNoRaceHorse`) formula violation of the form's own stated
+    # arithmetic ("1-3+4+5-5a=6").
+    ded = input_data.os_deductions
+    addbacks = (ded.amount_not_deductible_us58 + ded.profit_chargeable_us59) if ded else _ZERO
+    r.other_sources_income += addbacks
     # Deductions under section 57 (form item 3: "Deductions under section 57
     # (other than those relating to income chargeable at special rates)")
     # apply against the WHOLE normal-applicable-rate Other Sources pool --
@@ -445,14 +459,22 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # to the "normal applicable rate" pool, excluding it, or a taxpayer
     # with both race-horse profit and unrelated Section 57 expenses would
     # have the race-horse income wrongly reduced too.
+    # CORRECTION (2026-09-19): this pool must ALSO exclude
+    # `os_special_rate_si_income` (lottery/115BBJ/115BBE/111/115BBF/
+    # 115BBG/115BBA), not just race-horse income -- special-rate income is
+    # a wholly separate Schedule-OS/Schedule-SI bucket the general section
+    # 57 deduction was never meant to reduce (matching the same reasoning
+    # already applied to race-horse income above), and its presence here
+    # unfixed would let a Section 57 expense claim silently shrink taxable
+    # lottery/unexplained-income/etc. income.
     os_deductions = input_data.os_deductions
     os_general_deduction = (
         os_deductions.expenses + os_deductions.depreciation + os_deductions.interest_expense_eligible_us57
         if os_deductions else _ZERO
     )
-    os_normal_rate_before_57_deduction = r.other_sources_income - racehorse_profit_in_os
+    os_normal_rate_before_57_deduction = r.other_sources_income - racehorse_profit_in_os - os_special_rate_si_income
     os_normal_rate_after_57_deduction = max(_ZERO, os_normal_rate_before_57_deduction - os_general_deduction)
-    r.other_sources_income = racehorse_profit_in_os + os_normal_rate_after_57_deduction
+    r.other_sources_income = racehorse_profit_in_os + os_special_rate_si_income + os_normal_rate_after_57_deduction
     # Today's only representable current-year "normal" Other Sources loss,
     # routed into CYLA below instead of being silently discarded -- CBDT
     # rule #267 requires it be set off against race-horse profit first,
@@ -464,9 +486,12 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # `input_data.si_entries` -- so it is NOT covered by the
     # `_OS_HEAD_SI_SECTIONS` inclusion above and must be added to GTI here,
     # using the same gross-amount-taxed convention.
-    r.other_sources_income += sum(
+    # Tracked separately for the same CYLA-exclusion reason as
+    # `os_special_rate_si_income` above.
+    os_special_rate_entries_income = sum(
         (spr.source_amount for spr in input_data.os_special_rate_entries), _ZERO
     )
+    r.other_sources_income += os_special_rate_entries_income
     # DTAA-rate Other Sources income (Schedule OS's NRIDTAADtlsSchOS rows) --
     # likewise a field entirely separate from `input_data.si_entries`/
     # `_OS_HEAD_SI_SECTIONS`, so it needs the same independent GTI-inclusion
@@ -867,7 +892,24 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         stcg_dtaa_income=stcg_dtaa_signed,
         ltcg125_income=ltcg_125_signed + ltcg_112a_gross,
         ltcg_dtaa_income=ltcg_dtaa_signed,
-        non_salary_income=max(_ZERO, r.salary_income) + max(_ZERO, r.other_sources_income),
+        # CORRECTION (2026-09-19): special-rate Other Sources income
+        # (lottery/115BBJ/115BBE/111/115BBF/115BBG/115BBA via
+        # `os_special_rate_si_income`, the NRI/FII 115A-family dropdown via
+        # `os_special_rate_entries_income`, and DTAA-rate OS income via
+        # `r.os_dtaa_income`) must be excluded from the ordinary-loss
+        # absorption pool -- Section 58(4)/the official form's own
+        # Schedule CYLA structure (rows i-xiv) provide no current-year-loss
+        # set-off row for any of these categories, only for normal-rate OS
+        # income (row x), race horse (row xi, already excluded via its own
+        # dedicated `racehorse_income` field below), and DTAA-rate income
+        # (row xii, disclosure-only passthrough). Previously blended into
+        # `r.other_sources_income` unchanged, this pool let an HP/business
+        # loss wrongly "absorb" against special-rate income that should
+        # have been statutorily ineligible, extinguishing a loss that
+        # should instead have carried forward to Schedule CFL.
+        non_salary_income=max(_ZERO, r.salary_income) + max(_ZERO,
+            r.other_sources_income - os_special_rate_si_income - os_special_rate_entries_income - r.os_dtaa_income,
+        ),
         non_spec_biz_loss=_ZERO,
         non_spec_biz_income=_ZERO,
         spec_biz_loss=_ZERO,
