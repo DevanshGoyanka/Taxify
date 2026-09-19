@@ -42,12 +42,19 @@ direct schema validation, not just a disclosure completeness gap):
 These four are grouped as one fix/one commit since they share the same
 code region and the same root discovery pass -- see
 `Docs/ITR3_SCHEDULE_IMPLEMENTATION_TRACKER.md`'s own Schedule 24 fix-log
-entry for the full write-up, including what's deliberately NOT fixed here
-(race horse activity, 56(2)(x) gift sub-breakdown, section 89A, DTAA-OS,
-accumulated PF, the 115BBG/115BBJ/115BBA/111/115E SI-section family) --
-those need new `ITR3Input` schema fields and mapper wiring the frontend
-draft schema already captures but ITR-3's own mapper never reads, a
-larger, separately-scoped follow-on build-out.
+entry for the full write-up.
+
+**Update (2026-09-19, same day): the follow-on build-out this file's own
+docstring originally deferred (race horse activity, 56(2)(x) gift
+sub-breakdown, section 89A, DTAA-OS, accumulated PF u/s 111, the
+115BBG/115BBJ/115BBA/111/115A-family SI-section set, dividend/interest
+sub-classification, and the richer Section 57 deduction set) is now
+closed too, ported directly from ITR-2's own already-correct
+implementation -- including two genuine bugs found and fixed IN ITR-2
+itself first (CYLA special-rate contamination, item 4/5 gating), so this
+port starts from the fixed logic, not the pre-fix version. See the
+tests below this comment (`Section: full build-out`) and the tracker's
+own updated Schedule 24 entry for the complete write-up.
 """
 
 from __future__ import annotations
@@ -60,8 +67,13 @@ from app.engine.calculators.itr3 import compute as compute_itr3
 from app.engine.itd.itr3 import _schedule_os, _partb_ti
 from app.engine.itd.itr3_schema import get_itr3_schema_validator
 from app.schemas.itr1 import OtherSourcesIncome
-from app.schemas.itr2 import ScheduleSIEntry
+from app.schemas.itr2 import (
+    ScheduleSIEntry, OSGiftBreakdown, OSAccumulatedPFEntry, OSSpecialRateEntry,
+    OSDtaaEntry, OSDeductions, OSRaceHorseActivity,
+)
 from app.schemas.itr3 import ITR3Input
+from app.schemas.return_draft import create_empty_draft, WinningIncome, Presumptive44AD
+from app.engine.draft_to_itr3_input import draft_to_itr3_input
 
 
 def _schedule_os_validator() -> Draft4Validator:
@@ -143,7 +155,7 @@ def test_partb_ti_incfromos_agrees_with_gti_when_only_lottery_income() -> None:
         si_entries=[_lottery_entry(Decimal("100000"))],
     )
     result = compute_itr3(typed)
-    payload = _partb_ti(result)
+    payload = _partb_ti(result, typed)
     assert payload["IncFromOS"]["TotIncFromOS"] == 100000
     assert payload["IncFromOS"]["TotIncFromOS"] == result.gross_total_income
 
@@ -198,7 +210,7 @@ def test_mixed_normal_and_special_rate_os_income_splits_correctly() -> None:
     errors = list(_schedule_os_validator().iter_errors(os_json))
     assert not errors, "\n".join(e.message for e in errors)
 
-    partb = _partb_ti(result)
+    partb = _partb_ti(result, typed)
     assert partb["IncFromOS"]["OtherSrcThanOwnRaceHorse"] == 50000
     assert partb["IncFromOS"]["IncChargblSplRate"] == 100000
     assert partb["IncFromOS"]["TotIncFromOS"] == 150000
@@ -223,3 +235,140 @@ def test_schedule_os_passes_official_schema_validation() -> None:
     os_json = _schedule_os(result, typed)
     errors = list(_schedule_os_validator().iter_errors(os_json))
     assert not errors, "\n".join(e.message for e in errors)
+
+
+# ===========================================================================
+# Section: full build-out (2026-09-19) -- race horse, gifts, PF, section
+# 89A, DTAA-OS, and the NRI/FII 115A-family, ported from ITR-2's own
+# already-correct (and, for two bugs, freshly-corrected) implementation.
+# ===========================================================================
+
+def _base_draft():
+    draft = create_empty_draft("2026-27", "ITR-3", "old")
+    draft.personal.pan = "ABCDE1234F"
+    draft.personal.firstName = "Test"
+    draft.personal.surnameOrOrgName = "User"
+    draft.personal.dateOfBirth = "1980-01-01"
+    draft.personal.flatNo = "1"
+    draft.personal.localityOrArea = "Central"
+    draft.personal.city = "Delhi"
+    draft.personal.stateCode = "07"
+    draft.personal.countryCode = "91"
+    draft.personal.pinCode = "110001"
+    draft.personal.mobile = "9876543210"
+    draft.personal.email = "test@example.com"
+    draft.verification.place = "Delhi"
+    draft.verification.date = "2026-07-31"
+    draft.verification.declarationAccepted = True
+    draft.businesses = [Presumptive44AD(id="b1", natureCode="01001", digitalReceipts=Decimal("1000000"), declaredIncome=Decimal("60000"))]
+    return draft
+
+
+def test_lottery_and_race_horse_profit_both_reach_gti_via_draft_mapper() -> None:
+    """End-to-end: mapper -> calculator -> GTI, for a draft with both a
+    lottery win and a race-horse-activity profit."""
+    draft = _base_draft()
+    draft.otherSources.winnings = [
+        WinningIncome(id="w1", type="LOTTERY", grossAmount=Decimal("100000")),
+        WinningIncome(id="w2", type="RACE_HORSE_ACTIVITY", receipts=Decimal("500000"), deductionUs57=Decimal("50000")),
+    ]
+    typed, _ = draft_to_itr3_input(draft)
+    result = compute_itr3(typed)
+    assert result.gross_total_income == Decimal("610000")  # 60000 biz + 100000 lottery + 450000 racehorse
+    assert result.special_rate_tax == Decimal("30000")
+
+
+def test_race_horse_loss_excluded_from_gti_and_carried_to_cfl() -> None:
+    """Section 74A(3): a race-horse ACTIVITY loss never enters CYLA/BFLA --
+    it carries straight to CFL with its own 4-year limit."""
+    draft = _base_draft()
+    draft.otherSources.winnings = [
+        WinningIncome(id="w1", type="RACE_HORSE_ACTIVITY", receipts=Decimal("100000"), deductionUs57=Decimal("300000")),
+    ]
+    typed, _ = draft_to_itr3_input(draft)
+    result = compute_itr3(typed)
+    assert result.gross_total_income == Decimal("60000")  # business only, loss excluded
+    cfl = result.schedules.get("cfl")
+    assert {"head": "RaceHorse", "sub_category": None, "loss_cf": Decimal("200000")} in cfl
+
+
+def test_hp_loss_does_not_absorb_against_lottery_income_itr3() -> None:
+    """Mirrors the equivalent ITR-2 fix (row #260) -- special-rate OS
+    income is not a valid CYLA loss-absorption target for ITR-3 either."""
+    from app.schemas.itr1 import HousePropertyIncome, PropertyType
+    from app.schemas.itr3 import BusinessIncome
+
+    typed = ITR3Input(
+        age_bracket="below_60", tax_regime="old", pti_entries=[],
+        business_income=BusinessIncome(net_profit_before_tax=Decimal("0")),
+        house_properties=[HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED, home_loan_interest_paid=Decimal("200000"))],
+        si_entries=[_lottery_entry(Decimal("500000"))],
+    )
+    result = compute_itr3(typed)
+    assert result.cyla_total_set_off == Decimal("0")
+    assert result.gross_total_income == Decimal("500000")
+
+
+def test_gift_pf_nri_family_and_dtaa_os_all_reach_gti_and_validate() -> None:
+    """Gift income (56(2)(x)), accumulated PF (s.111), the NRI/FII
+    115A-family dropdown, and DTAA-OS income all correctly reach GTI and
+    produce schema-valid Schedule OS JSON, with no double-counting."""
+    typed = ITR3Input(
+        age_bracket="below_60", tax_regime="new", pti_entries=[],
+        other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("60000")),
+        os_gift_breakdown=OSGiftBreakdown(aggregate_without_consideration=Decimal("60000")),
+        os_pf_income_benefit=Decimal("40000"), os_pf_tax_benefit=Decimal("8000"),
+        os_pf_accumulated_entries=[OSAccumulatedPFEntry(assessment_year="2024-25", income_benefit=Decimal("40000"), tax_benefit=Decimal("8000"))],
+        si_entries=[ScheduleSIEntry(section="111", gross_income=Decimal("40000"))],
+        os_special_rate_entries=[OSSpecialRateEntry(source_description="5A1ai", source_amount=Decimal("200000"))],
+        os_dtaa_entries=[OSDtaaEntry(
+            amount=Decimal("50000"), nature_of_income="1c", country_name="USA", country_code="2",
+            dtaa_article="11", rate_as_per_treaty=Decimal("15"), rate_as_per_it_act=Decimal("30"),
+            tax_residency_certificate="Y", item_no_incl="56i", applicable_rate=Decimal("15"),
+        )],
+    )
+    result = compute_itr3(typed)
+    assert result.gross_total_income == Decimal("350000")  # 60000+40000+200000+50000
+
+    os_json = _schedule_os(result, typed)
+    errors = list(_schedule_os_validator().iter_errors(os_json))
+    assert not errors, "\n".join(e.message for e in errors)
+    block = os_json["IncOthThanOwnRaceHorse"]
+    assert block["Tot562x"] == 60000
+    assert block["TaxAccumulatedBalRecPF"]["TotalIncomeBenefit"] == 40000
+    assert block["OthersGross"] == 200000
+    assert block["IncChargblSplRateOS"]["NRIOsDTAA"]["NRIDTAADtlsSchOS"][0]["DTAAamt"] == 50000
+
+    partb = _partb_ti(result, typed)
+    assert partb["IncFromOS"]["TotIncFromOS"] == 350000
+    assert partb["IncFromOS"]["TotIncFromOS"] == result.gross_total_income
+
+
+def test_race_horse_json_block_and_schema_validates() -> None:
+    typed = ITR3Input(
+        age_bracket="below_60", tax_regime="old", pti_entries=[],
+        os_race_horse=OSRaceHorseActivity(receipts=Decimal("500000"), deduction_us57=Decimal("50000"), balance=Decimal("450000")),
+    )
+    result = compute_itr3(typed)
+    os_json = _schedule_os(result, typed)
+    errors = list(_schedule_os_validator().iter_errors(os_json))
+    assert not errors, "\n".join(e.message for e in errors)
+    assert os_json["IncFromOwnHorse"]["BalanceOwnRaceHorse"] == 450000
+    assert os_json["IncFromOwnHorse"]["Receipts"] == 500000
+
+
+def test_general_section_57_deduction_excludes_special_rate_income() -> None:
+    """The Section 57 general deduction (expenses/depreciation/eligible
+    interest) must reduce ONLY normal-rate OS income, never special-rate
+    SI-section income -- mirrors the equivalent ITR-2 fix."""
+    typed = ITR3Input(
+        age_bracket="below_60", tax_regime="new", pti_entries=[],
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("10000")),
+        os_deductions=OSDeductions(expenses=Decimal("100000")),  # far exceeds normal-rate income
+        si_entries=[_lottery_entry(Decimal("500000"))],
+    )
+    result = compute_itr3(typed)
+    # Normal-rate income fully absorbed by the deduction (floored at 0),
+    # but the 500000 lottery income must remain fully taxed, untouched.
+    assert result.special_rate_tax == Decimal("150000")
+    assert result.gross_total_income == Decimal("500000")

@@ -77,8 +77,9 @@ from app.engine.schedules.loss_setoff.cfl import compute as compute_cfl
 from app.engine.schedules.amt import compute as compute_amt, compute_amtc
 
 # Other-Sources-head Schedule SI sections this calculator dispatches
-# (`si_entries` loop below): lottery/game-show winnings (115BB),
-# unexplained income (68/69-series, 115BBE), patent royalty (115BBF).
+# (`si_entries` loop below): lottery/gaming (115BB/115BBJ), unexplained
+# income (68/69-series, 115BBE), accumulated PF (111), patent royalty
+# (115BBF), carbon credits (115BBG), non-resident sportsmen (115BBA).
 # These are Other Sources income taxed at a special rate rather than slab
 # rate -- they must be included in GTI/Total Income the same way
 # 111A/112/112A/VDA capital-gains special-rate income already is (see
@@ -87,12 +88,11 @@ from app.engine.schedules.amt import compute as compute_amt, compute_amtc
 # already subtracts this same total) removes income that was never added,
 # incorrectly zeroing GTI while tax is still charged on it. Mirrors
 # ITR-2's identical, already-shipped `_OS_HEAD_SI_SECTIONS`
-# (`calculators/itr2.py`) -- deliberately narrower for now, matching only
-# the three sections this calculator's own `si_entries` loop actually
-# dispatches (115BBG/115BBJ/115BBA/111/115E and the NRI/FII 5A-family
-# ITR-2 also supports have no ITR-3 schema/dispatch path yet -- a
-# documented, separately-scoped gap, not silently claimed closed here).
-_OS_HEAD_SI_SECTIONS = frozenset({"115BB", "115BBE", "115BBF"})
+# (`calculators/itr2.py`). The NRI/FII 115A-family dropdown and DTAA-OS
+# income are separate `ITR3Input` fields (`os_special_rate_entries`/
+# `os_dtaa_entries`), not `si_entries`, so they are NOT part of this set --
+# each has its own independent GTI-inclusion step below.
+_OS_HEAD_SI_SECTIONS = frozenset({"115BB", "115BBE", "115BBF", "115BBG", "115BBJ", "115BBA", "111"})
 
 
 @dataclass
@@ -103,6 +103,8 @@ class ITR3Result:
     house_property_income: Decimal = Decimal("0")
     capital_gains_income: Decimal = Decimal("0")
     other_sources_income: Decimal = Decimal("0")
+    os_dtaa_income: Decimal = Decimal("0")
+    os_racehorse_current_year_loss: Decimal = Decimal("0")
     vda_income: Decimal = Decimal("0")
     vda_income_cg: Decimal = Decimal("0")
     vda_income_bi: Decimal = Decimal("0")
@@ -741,19 +743,100 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     r.schedules["cg"] = cg_result
 
     # ── 5. Other Sources ────────────────────────────────────────────────
+    # Ported from ITR-2's own corrected calculator (`calculators/itr2.py`,
+    # fixed 2026-09-19 for the special-rate/CYLA-contamination and item-4/5
+    # gating bugs found while porting this build-out -- this port starts
+    # from the FIXED logic, not the pre-fix version, per the tracker's own
+    # Schedule 24 follow-on-build-out entry) -- Schedule OS richer
+    # sub-categories: race horse activity, section 56(2)(x) gifts (already
+    # folded into `other_sources_income` by the mapper), machinery/plant
+    # rent + items 4/5 addbacks, the general Section 57 deduction, and the
+    # PF-interest-proviso/pass-through/other-income categories the mapper
+    # separately backs out of the generic aggregate to avoid double-count.
     os_ = compute_os(input_data.other_sources_income, regime)
     r.other_sources_income = os_.income_chargeable
-    r.schedules["os"] = os_
-    # See `_OS_HEAD_SI_SECTIONS` above -- Other-Sources-head special-rate
-    # income (lottery/unexplained-income/patent-royalty) must reach GTI
-    # here, the same way it's included via `si_entries` gross_income for
-    # the flat-rate tax dispatch below (`compute_lottery()`/`compute_115bbe()`/
-    # `compute_115bbf()`, ~line 1090) -- uses gross_income (not net of any
-    # deduction) to match exactly what those functions actually tax.
-    r.other_sources_income += sum(
+    # Tracked separately (not just added to the blended total) so the
+    # Section 57 general-deduction pool and CYLA's `non_salary_income`
+    # below can both correctly exclude it -- special-rate income is not a
+    # valid loss-absorption target (Section 58(4)/the official form's own
+    # Schedule CYLA structure has no row for it).
+    os_special_rate_si_income = sum(
         (sie.gross_income for sie in (input_data.si_entries or []) if sie.section in _OS_HEAD_SI_SECTIONS),
         z,
     )
+    r.other_sources_income += os_special_rate_si_income
+    # Income from owning/maintaining race horses (Schedule OS's own
+    # "IncFromOwnHorse" sub-head) is slab-rate Other Sources income, just
+    # disclosed separately. A negative balance (loss) never enters CYLA/BFLA
+    # at all -- Section 74A(3) quarantines it, only a FUTURE year's
+    # race-horse profit can absorb it -- so it's carried straight to CFL
+    # below instead, with its own 4-year (not the ordinary 8-year) limit.
+    racehorse_profit_in_os = z
+    racehorse_current_year_loss = z
+    if input_data.os_race_horse is not None:
+        racehorse_profit_in_os = max(z, input_data.os_race_horse.balance)
+        racehorse_current_year_loss = max(z, -input_data.os_race_horse.balance)
+        r.other_sources_income += racehorse_profit_in_os
+    r.os_racehorse_current_year_loss = racehorse_current_year_loss
+    # Income from letting machinery/plant/furniture (Section 56(2)(ii)/(iii))
+    # is ordinary slab-rate Other Sources income.
+    if input_data.os_machinery_plant_rent:
+        r.other_sources_income += input_data.os_machinery_plant_rent
+    # Items 4/5 ("Amounts not deductible u/s 58", "Profits chargeable to
+    # tax u/s 59") are standalone Schedule-OS lines, not sub-items of
+    # machinery/plant/furniture letting income -- apply unconditionally.
+    os_deductions_input = input_data.os_deductions
+    addbacks = (
+        (os_deductions_input.amount_not_deductible_us58 + os_deductions_input.profit_chargeable_us59)
+        if os_deductions_input else z
+    )
+    r.other_sources_income += addbacks
+    # Deductions under section 57 (form item 3) apply against the WHOLE
+    # normal-applicable-rate Other Sources pool -- excluding race-horse
+    # income (its own specific deduction, `OSRaceHorseActivity.
+    # deduction_us57`, already netted into `balance` above) and
+    # special-rate SI-section income (a wholly separate bucket a Section
+    # 57 expense claim must never reduce).
+    os_general_deduction = (
+        os_deductions_input.expenses + os_deductions_input.depreciation
+        + os_deductions_input.interest_expense_eligible_us57
+        if os_deductions_input else z
+    )
+    os_normal_rate_before_57_deduction = r.other_sources_income - racehorse_profit_in_os - os_special_rate_si_income
+    os_normal_rate_after_57_deduction = max(z, os_normal_rate_before_57_deduction - os_general_deduction)
+    r.other_sources_income = racehorse_profit_in_os + os_special_rate_si_income + os_normal_rate_after_57_deduction
+    # Today's only representable current-year "normal" Other Sources loss,
+    # routed into CYLA below instead of being silently discarded -- CBDT
+    # rule #267 requires it be set off against race-horse profit first,
+    # then (per Section 71) cross-head.
+    os_loss_amount = max(z, os_general_deduction - os_normal_rate_before_57_deduction)
+    # NRI/FII special-rate Other Sources income (Section 115A/115AC/115ACA/
+    # 115AD/115E family, Schedule OS's "OthersGrossDtls" dropdown) lives in
+    # its own `os_special_rate_entries` field, entirely separate from
+    # `input_data.si_entries`/`_OS_HEAD_SI_SECTIONS`.
+    os_special_rate_entries_income = sum(
+        (spr.source_amount for spr in (input_data.os_special_rate_entries or [])), z,
+    )
+    r.other_sources_income += os_special_rate_entries_income
+    # DTAA-rate Other Sources income (Schedule OS's NRIDTAADtlsSchOS rows).
+    r.os_dtaa_income = sum((dtaa.amount for dtaa in (input_data.os_dtaa_entries or [])), z)
+    r.other_sources_income += r.os_dtaa_income
+    # "Any other income" detail rows, machinery/plant-rent pass-through
+    # disclosure, and PF-interest-proviso/miscellaneous-interest categories
+    # -- the mapper backs these out of the generic `other_income`/interest
+    # aggregate to avoid double-counting, so they must be added back here.
+    r.other_sources_income += sum(
+        (entry.amount for entry in (input_data.os_other_income_entries or [])), z,
+    )
+    r.other_sources_income += input_data.os_pass_through_income
+    r.other_sources_income += (
+        input_data.os_pf_interest_10_11_first_proviso
+        + input_data.os_pf_interest_10_11_second_proviso
+        + input_data.os_pf_interest_10_12_first_proviso
+        + input_data.os_pf_interest_10_12_second_proviso
+        + input_data.os_interest_from_others
+    )
+    r.schedules["os"] = os_
 
     # ── 6. Clubbing (SPI) ───────────────────────────────────────────────
     clubbing = z
@@ -854,7 +937,22 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         stcg_dtaa_income=stcg_dtaa_signed,
         ltcg125_income=ltcg_125_signed + ltcg_112a_gross,
         ltcg_dtaa_income=ltcg_dtaa_signed,
-        non_salary_income=max(z, r.salary_income) + max(z, r.other_sources_income - r.clubbing_income),
+        # Special-rate Other Sources income (lottery/115BBJ/115BBE/111/
+        # 115BBF/115BBG/115BBA via `os_special_rate_si_income`, the NRI/FII
+        # 115A-family via `os_special_rate_entries_income`, DTAA-rate OS
+        # income via `r.os_dtaa_income`) must be excluded from the
+        # ordinary-loss absorption pool -- Section 58(4)/the official
+        # form's own Schedule CYLA structure provide no current-year-loss
+        # set-off row for any of these categories, only for normal-rate OS
+        # income and race horse (excluded via its own dedicated field
+        # below). Mirrors ITR-2's identical, already-fixed correction.
+        non_salary_income=max(z, r.salary_income) + max(z, (
+            r.other_sources_income - r.clubbing_income
+            - racehorse_profit_in_os - os_special_rate_si_income
+            - os_special_rate_entries_income - r.os_dtaa_income
+        )),
+        racehorse_income=racehorse_profit_in_os,
+        os_loss=os_loss_amount,
     )
     cyla = compute_cyla(cy_input)
     r.cyla_total_set_off = cyla.total_loss_set_off
@@ -893,6 +991,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         stcg_dtaa_income=cyla.stcg_dtaa_remaining,
         ltcg125_income=cyla.ltcg125_remaining,
         ltcg_dtaa_income=cyla.ltcg_dtaa_remaining,
+        racehorse_income=cyla.racehorse_remaining,
         bf_losses=bf_list,
     )
     bfla = compute_bfla(bf_input)
@@ -913,6 +1012,16 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         if entry.remaining_carry_forward > 0:
             cfl_entries.append({"head": entry.head, "sub_category": entry.sub_category,
                                 "loss_cf": entry.remaining_carry_forward})
+    # Section 74A(3): a race-horse ACTIVITY loss (its own balance < 0, as
+    # opposed to `os_loss` above, a different normal-OS-deduction-driven
+    # loss CYLA already set off against race-horse profit) never enters
+    # CYLA/BFLA at all -- it can only ever be set off against a FUTURE
+    # year's race-horse profit, so it carries straight to CFL here, with
+    # its own 4-year (not the ordinary 8-year) limit. Mirrors ITR-2's
+    # identical, already-shipped handling.
+    if r.os_racehorse_current_year_loss > 0:
+        cfl_entries.append({"head": "RaceHorse", "sub_category": None,
+                            "loss_cf": r.os_racehorse_current_year_loss})
     r.schedules["cfl"] = cfl_entries
 
     # ── 11. GTI after losses, and post-loss capital-gain rate baskets ───
@@ -1113,6 +1222,45 @@ def compute(input_data: ITR3Input) -> ITR3Result:
             si_entries.append(compute_115bbe(sie.gross_income))
         elif sie.section == "115BBF":
             si_entries.append(compute_115bbf(sie.gross_income))
+        elif sie.section == "115BBG":
+            from app.engine.schedules.special_rates import compute_115bbg
+            si_entries.append(compute_115bbg(sie.gross_income))
+        elif sie.section == "115BBJ":
+            from app.engine.schedules.special_rates import compute_115bbj
+            si_entries.append(compute_115bbj(sie.gross_income))
+        elif sie.section == "115BBA":
+            from app.engine.schedules.special_rates import compute_115bba
+            si_entries.append(compute_115bba(sie.gross_income))
+        elif sie.section == "111":
+            from app.engine.schedules.special_rates import compute_111
+            si_entries.append(compute_111(sie.gross_income))
+
+    # Schedule OS "any other income chargeable at special rate" dropdown --
+    # the Section 115A/115AC/115ACA/115AD/115E/115BBF/115BBG family of
+    # NRI/FII-specific special-rate categories, entirely separate from
+    # `si_entries` above.
+    from app.engine.schedules.special_rates import compute_other_special_rate_income
+    for spr in (input_data.os_special_rate_entries or []):
+        if spr.source_description == "5BBF":
+            si_entries.append(compute_115bbf(spr.source_amount))
+        elif spr.source_description == "5BBG":
+            from app.engine.schedules.special_rates import compute_115bbg
+            si_entries.append(compute_115bbg(spr.source_amount))
+        elif spr.source_description == "5Ea":
+            from app.engine.schedules.special_rates import compute_115e_a
+            si_entries.append(compute_115e_a(spr.source_amount))
+        elif spr.source_description == "5BBA":
+            from app.engine.schedules.special_rates import compute_115bba
+            si_entries.append(compute_115bba(spr.source_amount))
+        else:
+            si_entries.append(compute_other_special_rate_income(spr.source_description, spr.source_amount))
+
+    # DTAA-rate Other Sources income (Schedule OS's NRIDTAADtlsSchOS detail
+    # rows) -> taxed via Schedule SI's dedicated "DTAAOS" code at each
+    # entry's own treaty-vs-Act beneficial rate (section 90(2)).
+    from app.engine.schedules.special_rates import compute_dtaa_os
+    for dtaa in (input_data.os_dtaa_entries or []):
+        si_entries.append(compute_dtaa_os(dtaa.amount, dtaa.applicable_rate))
 
     si_result = aggregate_si(si_entries)
     r.special_rate_tax = si_result.total_special_rate_tax

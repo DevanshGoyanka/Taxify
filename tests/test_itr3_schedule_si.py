@@ -15,7 +15,16 @@ from app.schemas.itr2 import ScheduleSIEntry
 
 
 def test_partb_ti_os_special_rate_excludes_capital_gain_and_vda_si_rows() -> None:
-    """Part B-TI 5b is Schedule OS 2, not the whole Schedule SI total."""
+    """Part B-TI 5b is Schedule OS 2, not the whole Schedule SI total.
+
+    Since Phase 24's Schedule OS build-out, `IncFromOS.IncChargblSplRate`
+    is sourced from `_schedule_os()`'s own already-computed total (a
+    single-source-of-truth fix covering the NRI/FII 115A-family and
+    DTAA-OS categories a bare SI-section-name filter couldn't) -- so
+    `typed_input.si_entries` must carry the same OS-head entries
+    `result.schedules["si"]` claims, for this hand-constructed scenario to
+    reflect a realistic one.
+    """
     result = ITR3Result()
     result.schedules["si"] = SpecialRatesResult(entries=[
         SpecialRateEntry(section="111A", taxable_income=Decimal("20000")),
@@ -24,7 +33,14 @@ def test_partb_ti_os_special_rate_excludes_capital_gain_and_vda_si_rows() -> Non
         SpecialRateEntry(section="115BB", taxable_income=Decimal("5000")),
         SpecialRateEntry(section="115BBE", taxable_income=Decimal("6000")),
     ])
-    payload = _partb_ti(result)
+    typed = ITR3Input(
+        age_bracket="below_60", tax_regime="new",
+        si_entries=[
+            ScheduleSIEntry(section="115BB", gross_income=Decimal("5000")),
+            ScheduleSIEntry(section="115BBE", gross_income=Decimal("6000")),
+        ],
+    )
+    payload = _partb_ti(result, typed)
     assert payload["IncFromOS"]["IncChargblSplRate"] == 11000
     assert payload["IncChargeTaxSplRate111A112"] == 101000
 

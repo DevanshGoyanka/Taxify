@@ -12,7 +12,13 @@ from app.engine.draft_to_itr1_input import DraftMappingError, draft_to_itr1_inpu
 from app.schemas.itr3 import AuditInfo, BalanceSheet, BSOfficial, BSProprietorsFund, BSReserves, BSLoanGroup, BSUnsecuredLoanGroup, BSAdvances, BSFixedAsset, BSCurrentAssets, BSInventory, BSCashBank, BSCurrentLiabilities, BSProvisions, BSInvestments, BSLongTermInv, BSTradeInv, BSLoanAdvances, BSMiscAdjust, BSNoBooks, BSRupeeLoan, BusinessIncome, ITR3BusinessAccounts, ITR3Input, ITR3ScheduleSEmployer, ITR3ScheduleHPProperty, ManufacturingAccount, MfgOpeningInventory, MfgClosingStock, NatureOfBusiness, ProfitAndLoss, PLPartA, PLPLPartACreditsToPL, PLPLPartATaxProvAppr, PLPLPartANoBooksOfAccPL, PLPLPartADebitsToPL, PLPLPLPartADebitsToPLInterestExpdrtDtls, PLPLPLPartACreditsToPLOthIncome, TradingAccount, TradingOtherRevenueEntry, TradingOtherIncomeEntry, TradingExciseCustomsVAT, TradingDutyTaxPay, TradingDutyTaxPayExciseCustomsVAT, ITR3PartAOI, ITR3PartAQD, ScheduleESR, ScheduleGST, ScheduleICDS, ITR3ScheduleTPSA, ITR3DeductionDetails, ITR3DeductionDonation, ITR3DeductionLoan, ITR3Schedule80IA, ITR3Schedule80IB, ITR3Schedule80IC, ITR3Schedule80RA, ITR3Schedule10AA, ITR3Schedule80D, ITR3Schedule80DCategory, ITR3Schedule80DHealth, ITR3Schedule80DInsurance, ITR3Schedule80DD, ITR3Schedule80U, \
     ITR3DepreciationSchedules, ScheduleDPM, ScheduleDOA, ScheduleDEP, ScheduleDCG, ITR3SlumpSaleRow, ITR3UnutilizedCGRow
 from app.schemas.itr2 import ResidentialStatus as ITR3ResidentialStatus, ReturnFileSection
-from app.engine.draft_to_itr2_input import _map_112a_scrips, _map_immovable_gains, _map_equity_stt_stcg, _map_other_assets, _map_nri_fii_securities, _map_nri_112_115_securities, _map_buyback_losses, _map_cg_nri_proviso_48, _map_cg_dtaa_entries, _map_vda_transactions, _map_fsi_entries, _map_tr1_entries, _map_foreign_assets, _map_asset_liability, _map_schedule_5a, _map_esop_deferrals
+from app.engine.draft_to_itr2_input import _map_112a_scrips, _map_immovable_gains, _map_equity_stt_stcg, _map_other_assets, _map_nri_fii_securities, _map_nri_112_115_securities, _map_buyback_losses, _map_cg_nri_proviso_48, _map_cg_dtaa_entries, _map_vda_transactions, _map_fsi_entries, _map_tr1_entries, _map_foreign_assets, _map_asset_liability, _map_schedule_5a, _map_esop_deferrals, \
+    _map_os_winnings_to_si, _map_os_accumulated_pf, _compute_os_gifts, _map_os_unexplained_income, \
+    _map_os_section_89a, _map_os_other_income_entries, _map_os_machinery_plant_rent, \
+    _map_os_pass_through_income, _map_os_interest_from_others, _map_os_dividend_entries, \
+    _map_os_dtaa_entries, _map_os_deductions, _map_os_race_horse, _map_os_winning_quarters, \
+    _map_os_special_rate_entries, _map_os_pf_interest_provisos
+from app.engine.draft_to_itr1_input import _map_other_sources
 from app.schemas.itr2 import CG112AScrip, CGTransaction, CGAssetType, ScheduleSIEntry, VDATransaction, SPIEntry, PTIEntry
 from app.schemas.return_draft import ReturnDraft
 from app.engine.validators.itr3.parta_pl import validate_parta_pl_arithmetic
@@ -1075,6 +1081,82 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
         raise DraftMappingError("draft_to_itr3_input requires draft.form == 'ITR-3'.")
     itr1, breakdown = draft_to_itr1_input(draft)
     values = itr1.model_dump()
+    # Schedule OS richer sub-categories (tracker row #24's follow-on
+    # build-out): race horse, section 56(2)(x) gift breakdown, section 89A,
+    # DTAA-OS, accumulated PF (section 111), the NRI/FII 115A-family
+    # special-rate dropdown, dividend/interest sub-classification, and the
+    # richer Section 57 deduction set -- ported directly from ITR-2's own
+    # already-correct mapper wiring (`draft_to_itr2_input.py`), which reads
+    # the identical `draft.otherSources.*` fields both forms' official
+    # schemas support in the same shape. `draft_to_itr1_input()`'s own
+    # `_map_other_sources()` call (folded into `values["other_sources_income"]`
+    # above) sums every otherIncome/interest row into one generic aggregate
+    # regardless of these ITR-2/3-only category tags -- recomputed here,
+    # directly from `_map_other_sources(draft)`, with the same category
+    # amounts backed back out to avoid double-counting once they're
+    # separately added back by the calculator's own dedicated fields.
+    os_input, _total_interest, _total_dividend, _family_pension, _total_winnings = (
+        _map_other_sources(draft)
+    )
+    os_machinery_plant_rent = _map_os_machinery_plant_rent(draft)
+    os_pass_through_income = _map_os_pass_through_income(draft)
+    os_other_income_entries = _map_os_other_income_entries(draft)
+    os_other_income_entries_total = sum((e.amount for e in os_other_income_entries), Decimal("0"))
+    (
+        os_pf_interest_10_11_first, os_pf_interest_10_11_second,
+        os_pf_interest_10_12_first, os_pf_interest_10_12_second,
+    ) = _map_os_pf_interest_provisos(draft)
+    os_interest_from_others = _map_os_interest_from_others(draft)
+    if (
+        os_machinery_plant_rent or os_pass_through_income or os_other_income_entries_total
+        or os_pf_interest_10_11_first or os_pf_interest_10_11_second
+        or os_pf_interest_10_12_first or os_pf_interest_10_12_second
+        or os_interest_from_others
+    ):
+        os_input = os_input.model_copy(update={
+            "other_income": max(
+                Decimal("0"),
+                os_input.other_income
+                - os_machinery_plant_rent
+                - os_pass_through_income
+                - os_other_income_entries_total
+                - os_pf_interest_10_11_first
+                - os_pf_interest_10_11_second
+                - os_pf_interest_10_12_first
+                - os_pf_interest_10_12_second
+                - os_interest_from_others,
+            )
+        })
+    os_si_entries = _map_os_winnings_to_si(draft.otherSources.winnings)
+    pf_si_entry, os_pf_income_benefit, os_pf_tax_benefit, os_pf_accumulated_entries = (
+        _map_os_accumulated_pf(draft.otherSources.accumulatedPf)
+    )
+    if pf_si_entry is not None:
+        os_si_entries.append(pf_si_entry)
+    gift_taxable, os_gift_breakdown = _compute_os_gifts(draft.otherSources.gifts)
+    if gift_taxable > 0:
+        os_input = os_input.model_copy(update={"income_56_2_x": gift_taxable})
+    os_unexplained_income = _map_os_unexplained_income(draft)
+    if os_unexplained_income is not None:
+        unexplained_total = os_unexplained_income.total
+        existing_115bbe_index = next(
+            (i for i, e in enumerate(os_si_entries) if e.section == "115BBE"), None
+        )
+        if existing_115bbe_index is not None:
+            existing = os_si_entries[existing_115bbe_index]
+            os_si_entries[existing_115bbe_index] = existing.model_copy(
+                update={"gross_income": existing.gross_income + unexplained_total}
+            )
+        else:
+            os_si_entries.append(ScheduleSIEntry(section="115BBE", gross_income=unexplained_total))
+    os_section_89a = _map_os_section_89a(draft)
+    os_dividend_entries = _map_os_dividend_entries(draft)
+    os_dtaa_entries = _map_os_dtaa_entries(draft)
+    os_dtaa_aggregate = draft.otherSources.dtaaAggregates.totalAmountTaxUsDtaa
+    os_deductions = _map_os_deductions(draft)
+    os_race_horse = _map_os_race_horse(draft.otherSources.winnings)
+    os_special_rate_entries = _map_os_special_rate_entries(draft)
+    os_lottery_quarters, os_gaming_quarters = _map_os_winning_quarters(draft.otherSources.winnings)
     oi_source = draft.itr3BusinessWorkspace.core.get("PARTA_OI")
     pl_source = draft.itr3BusinessWorkspace.core.get("PARTA_PL")
     if isinstance(pl_source, Mapping):
@@ -1234,7 +1316,7 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
         vda_transactions=vda_transactions,
         spi_entries=[SPIEntry(specified_person_name=row.specifiedPersonName, pan=row.pan or None, relationship=row.relationship, amount_included=row.amountIncluded, head_of_income=row.headOfIncome) for row in draft.clubbedIncome if row.specifiedPersonName and row.relationship],
         pti_entries=[PTIEntry(entity_name=row.entityName, entity_pan=row.entityPAN, income_head=row.incomeHead, section=row.section, income_amount=row.incomeAmount, tds_credit=row.tdsCredit) for row in draft.passThroughIncomeEntries if row.entityName and row.entityPAN],
-        si_entries=[ScheduleSIEntry(section=entry.section, description=entry.description or None, gross_income=entry.grossIncome, deductions=entry.deductions, tax_rate_pct=entry.taxRatePct) for entry in draft.scheduleSIEntries],
+        si_entries=[ScheduleSIEntry(section=entry.section, description=entry.description or None, gross_income=entry.grossIncome, deductions=entry.deductions, tax_rate_pct=entry.taxRatePct) for entry in draft.scheduleSIEntries] + os_si_entries,
         schedule_icds=schedule_icds,
         schedule_esr=schedule_esr,
         schedule_tpsa=schedule_tpsa,
@@ -1264,7 +1346,29 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
         ] or None,
         salary_income=values.get("salary_income"),
         house_property_income=values.get("house_property_income"),
-        other_sources_income=values.get("other_sources_income"),
+        other_sources_income=os_input,
+        os_gift_breakdown=os_gift_breakdown,
+        os_pf_income_benefit=os_pf_income_benefit,
+        os_pf_tax_benefit=os_pf_tax_benefit,
+        os_pf_accumulated_entries=os_pf_accumulated_entries,
+        os_unexplained_income=os_unexplained_income,
+        os_section_89a=os_section_89a,
+        os_other_income_entries=os_other_income_entries,
+        os_dividend_entries=os_dividend_entries,
+        os_dtaa_entries=os_dtaa_entries,
+        os_dtaa_aggregate=os_dtaa_aggregate,
+        os_deductions=os_deductions,
+        os_race_horse=os_race_horse,
+        os_pf_interest_10_11_first_proviso=os_pf_interest_10_11_first,
+        os_pf_interest_10_11_second_proviso=os_pf_interest_10_11_second,
+        os_pf_interest_10_12_first_proviso=os_pf_interest_10_12_first,
+        os_pf_interest_10_12_second_proviso=os_pf_interest_10_12_second,
+        os_interest_from_others=os_interest_from_others,
+        os_special_rate_entries=os_special_rate_entries,
+        os_lottery_quarters=os_lottery_quarters,
+        os_gaming_quarters=os_gaming_quarters,
+        os_machinery_plant_rent=os_machinery_plant_rent,
+        os_pass_through_income=os_pass_through_income,
         deductions_chapter6a=values.get("deductions_chapter6a"),
         deduction_details=details,
         fsi_entries=fsi_entries,

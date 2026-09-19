@@ -1810,138 +1810,404 @@ def _schedule_hp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
 
 
 
-def _schedule_os(result: ITR3Result, typed_input: ITR3Input | None = None) -> dict | None:
-    """Serialize the prepared Other Sources aggregate without placeholder rows.
+_OS_DIVIDEND_SECTION_DATE_RANGE_FIELD: dict[str, str] = {
+    "DTAA": "DividendDTAA",
+    "115A1aA": "DividendIncUs115A1aA",
+    "115A1ai": "DividendIncUs115A1ai",
+    "115AC": "DividendIncUs115AC",
+    "115ACA": "DividendIncUs115ACA",
+    "115AD1i": "DividendIncUs115AD1i",
+    "115BBDA": "DividendIncUs115BBDA",
+    "115BBDAaiii": "DividendIncUs115BBDAaiii",
+}
+_OS_SPECIAL_RATE_DIVIDEND_SECTIONS: dict[str, str] = {
+    "5A1ai": "115A1ai", "5A1aA": "115A1aA", "5AC1abD": "115AC",
+    "5ACA1a": "115ACA", "5AD1iDiv": "115AD1i",
+}
 
-    Every populated amount comes from the typed ``OtherSourcesIncome`` model,
-    the typed calculator result, or the OS-head Schedule SI entries
-    (`_OS_HEAD_SI_SECTIONS`).  Unsupported detailed disclosures (race horse,
-    89A, DTAA-OS, unexplained-income sub-categories, 56(2)(x) gift
-    sub-breakdown) are not invented; callers must provide the richer
-    official source before those optional sections are populated -- this
-    engine's mapper does not capture them for ITR-3 today.
+
+def _os_date_range(q1: Decimal = Decimal("0"), q2: Decimal = Decimal("0"), q3: Decimal = Decimal("0"),
+                    q4: Decimal = Decimal("0"), q5: Decimal = Decimal("0")) -> dict:
+    """Build one Schedule-OS `DateRangeTypeOS`-shaped block.
+
+    Deliberately its own helper, distinct from `_date_range_from_values()`
+    (used by Table F/etc., the unrelated `DateRangeType` shape) -- ITR-3's
+    official schema genuinely uses a DIFFERENT key for the second quarter
+    here (`Up16Of6To15Of9`, not `Upto15Of9`), confirmed by direct schema
+    introspection (`DateRangeTypeOS` vs `DateRangeType` are two distinct
+    definitions in the official schema, not a typo in one of them).
+    """
+    return {"DateRange": {
+        "Upto15Of6": _to_rupees(q1), "Up16Of6To15Of9": _to_rupees(q2),
+        "Up16Of9To15Of12": _to_rupees(q3), "Up16Of12To15Of3": _to_rupees(q4),
+        "Up16Of3To31Of3": _to_rupees(q5),
+    }}
+
+
+def _schedule_os(result: ITR3Result, typed_input: ITR3Input | None = None) -> dict | None:
+    """Serialize the prepared Other Sources aggregate.
+
+    Ported from ITR-2's own corrected `_schedule_os()` (`itd/itr2.py`),
+    which both forms' official schemas support in the same shape (field
+    names match almost exactly; only the `DateRangeTypeOS` quarter-2 key
+    genuinely differs between the two forms, handled by `_os_date_range()`
+    above). Every populated amount comes from the typed
+    ``OtherSourcesIncome`` model, the richer `os_*` fields (tracker row
+    #24's follow-on build-out), the typed calculator result, or the
+    OS-head Schedule SI entries (`_OS_HEAD_SI_SECTIONS`).
     """
     from app.schemas.itr1 import OtherSourcesIncome
 
     if typed_input is None:
         return None
+    z = Decimal("0")
+    os_head_si_entries = [
+        sie for sie in (typed_input.si_entries or [])
+        if sie.section in _OS_HEAD_SI_SECTIONS
+    ]
     # Schedule OS must still be built when the ONLY OS-head income is a
     # special-rate `si_entries` row (e.g. a bare lottery win with no
     # `other_sources_income` model at all) -- previously this guard
     # returned None outright, omitting Schedule OS from the filed JSON
     # while Part B-TI simultaneously disclosed a nonzero IncFromOS for the
     # same income, an internally self-contradictory return.
-    os_head_si_entries = [
-        sie for sie in (typed_input.si_entries or [])
-        if sie.section in _OS_HEAD_SI_SECTIONS
-    ]
-    if typed_input.other_sources_income is None and not os_head_si_entries:
+    if (
+        typed_input.other_sources_income is None and not os_head_si_entries
+        and typed_input.os_gift_breakdown is None
+        and not (typed_input.os_pf_income_benefit or typed_input.os_pf_tax_benefit)
+        and typed_input.os_unexplained_income is None
+        and typed_input.os_section_89a is None
+        and not typed_input.os_other_income_entries
+        and not typed_input.os_dividend_entries
+        and not typed_input.os_dtaa_entries
+        and not typed_input.os_dtaa_aggregate
+        and typed_input.os_deductions is None
+        and typed_input.os_race_horse is None
+        and not (
+            typed_input.os_pf_interest_10_11_first_proviso or typed_input.os_pf_interest_10_11_second_proviso
+            or typed_input.os_pf_interest_10_12_first_proviso or typed_input.os_pf_interest_10_12_second_proviso
+        )
+        and not typed_input.os_interest_from_others
+        and not typed_input.os_machinery_plant_rent
+        and not typed_input.os_pass_through_income
+        and not typed_input.os_special_rate_entries
+    ):
         return None
     source = typed_input.other_sources_income or OtherSourcesIncome()
     computed = result.schedules.get("os")
-    zero = 0
-    family = source.family_pension_received
-    deductions = getattr(computed, "deduction_57iia", Decimal("0"))
+    deduction_57iia = getattr(computed, "deduction_57iia", z)
 
-    lottery_115bb = sum((sie.gross_income for sie in os_head_si_entries if sie.section == "115BB"), Decimal("0"))
-    unexplained_115bbe = sum((sie.gross_income for sie in os_head_si_entries if sie.section == "115BBE"), Decimal("0"))
-    # 115BBF (patent royalty) has no dedicated official-schema field for
-    # ITR-3 yet (ITR-2's equivalent uses its own "OthersGrossDtls" named
-    # dropdown array, not yet ported here) -- still folded into the
-    # aggregate total below so the item-1/item-6 cross-foot stays correct
-    # regardless of which OS-head SI section is actually used, even though
-    # its own named breakdown row is deferred.
-    other_special_rate = sum(
-        (sie.gross_income for sie in os_head_si_entries if sie.section not in ("115BB", "115BBE")), Decimal("0"),
-    )
-    inc_chargeable_special_rates = lottery_115bb + unexplained_115bbe + other_special_rate
+    race_horse = typed_input.os_race_horse
+    race_horse_profit = max(z, race_horse.balance) if race_horse else z
+    os_excl_race_horse = result.other_sources_income - race_horse_profit
 
-    dividend_gross = source.dividend_income
-    interest_gross = source.savings_bank_interest + source.fixed_deposit_interest + source.interest_on_it_refund
-    any_other_income = source.other_income
-    # Form item 1 ("Gross income chargeable to tax at normal applicable
-    # rates", 1a+1b+1c+1d+1e) is normal-rate OS income ONLY -- special-rate
-    # OS income (item 2, IncChargeableSpecialRates) is a separate,
-    # non-overlapping bucket per the form's own item-1/item-2 split
-    # (mirrors ITR-2's own already-shipped, live-UAT-corrected formula).
-    # Family pension is included per the form's own item "1e" breakdown
-    # ("Any other income... Sl.No.1 Family Pension"). 56(2)(x) gift income
-    # (Tot562x, item 1d) is deliberately excluded -- ITR-3's mapper never
-    # reads `draft.otherSources.gifts` today (confirmed by direct grep, a
-    # documented richer-build-out gap), so `income_56_2_x`/`income_56_2_vib`
-    # are always zero for every return this engine can currently produce;
-    # including them would be dead code, not a real fix, until that mapper
-    # gap closes.
-    gross_normal_rate = dividend_gross + interest_gross + family + any_other_income
-    balance_no_race_horse = max(Decimal("0"), gross_normal_rate - deductions)
-
-    other = {
-        "GrossIncChrgblTaxAtAppRate": _to_rupees(gross_normal_rate),
-        "DividendGross": _to_rupees(dividend_gross),
-        "DividendOthThan22e": _to_rupees(dividend_gross),
-        "Dividend22e": zero,
-        "InterestGross": _to_rupees(interest_gross),
+    block: dict[str, Any] = {
+        "GrossIncChrgblTaxAtAppRate": 0,
+        "DividendGross": _to_rupees(source.dividend_income),
+        "DividendOthThan22e": _to_rupees(source.dividend_income),
+        "Dividend22e": 0,
+        "Dividend22f": 0,
+        "InterestGross": 0,
         "IntrstFrmSavingBank": _to_rupees(source.savings_bank_interest),
         "IntrstFrmTermDeposit": _to_rupees(source.fixed_deposit_interest),
         "IntrstFrmIncmTaxRefund": _to_rupees(source.interest_on_it_refund),
-        "NatofPassThrghIncome": zero,
-        "IntrstFrmOthers": zero,
-        "RentFromMachPlantBldgs": zero,
-        "Tot562x": zero,
-        "Aggrtvaluewithoutcons562x": zero,
-        "Immovpropwithoutcons562x": zero,
-        "Immovpropinadeqcons562x": zero,
-        "Anyotherpropwithoutcons562x": zero,
-        "Anyotherpropinadeqcons562x": zero,
-        "FamilyPension": _to_rupees(family),
-        "IncomeNotified89AOS": zero,
-        "IncomeNotifiedOther89AOS": zero,
-        "IncomeNotifiedPrYr89AOS": zero,
-        "AnyOtherIncome": _to_rupees(any_other_income),
-        "IncChargeableSpecialRates": _to_rupees(inc_chargeable_special_rates),
-        "LtryPzzlChrgblUs115BB": _to_rupees(lottery_115bb),
-        "IncChrgblUs115BBE": _to_rupees(unexplained_115bbe),
-        "CashCreditsUs68": zero,
-        "UnExplndInvstmntsUs69": zero,
-        "UnExplndMoneyUs69A": zero,
-        "UnDsclsdInvstmntsUs69B": zero,
-        "UnExplndExpndtrUs69C": zero,
-        "AmtBrwdRepaidOnHundiUs69D": zero,
-        "OthersGross": zero,
-        "PassThrIncOSChrgblSplRate": zero,
-        "Deductions": {"DeductionUs57iia": _to_rupees(deductions), "Depreciation": zero, "TotDeductions": _to_rupees(deductions)},
-        "BalanceNoRaceHorse": _to_rupees(balance_no_race_horse),
+        "NatofPassThrghIncome": _to_rupees(typed_input.os_pass_through_income),
+        "IntrstSec10XIFirstProviso": _to_rupees(typed_input.os_pf_interest_10_11_first_proviso),
+        "IntrstSec10XISecondProviso": _to_rupees(typed_input.os_pf_interest_10_11_second_proviso),
+        "IntrstSec10XIIFirstProviso": _to_rupees(typed_input.os_pf_interest_10_12_first_proviso),
+        "IntrstSec10XIISecondProviso": _to_rupees(typed_input.os_pf_interest_10_12_second_proviso),
+        "IntrstFrmOthers": _to_rupees(typed_input.os_interest_from_others),
+        "RentFromMachPlantBldgs": _to_rupees(typed_input.os_machinery_plant_rent),
+        "Tot562x": _to_rupees(source.income_56_2_x),
+        "Aggrtvaluewithoutcons562x": 0,
+        "Immovpropwithoutcons562x": 0,
+        "Immovpropinadeqcons562x": 0,
+        "Anyotherpropwithoutcons562x": 0,
+        "Anyotherpropinadeqcons562x": 0,
+        "FamilyPension": _to_rupees(source.family_pension_received),
+        "IncomeNotified89AOS": 0,
+        "IncomeNotified89ATypeOS": [],
+        "IncomeNotifiedOther89AOS": 0,
+        "IncomeNotifiedPrYr89AOS": 0,
+        "AnyOtherIncome": 0,
+        "OthersInc": {"OthersIncDtls": []},
+        "IncChargeableSpecialRates": 0,
+        "LtryPzzlChrgblUs115BB": 0,
+        "IncChrgblUs115BBJ": 0,
+        "IncChrgblUs115BBE": 0,
+        "CashCreditsUs68": 0,
+        "UnExplndInvstmntsUs69": 0,
+        "SumRecdPrYrBusTRU562xii": 0,
+        "SumRecdPrYrLifIns562xiii": 0,
+        "UnExplndMoneyUs69A": 0,
+        "UnDsclsdInvstmntsUs69B": 0,
+        "UnExplndExpndtrUs69C": 0,
+        "AmtBrwdRepaidOnHundiUs69D": 0,
+        "TaxAccumulatedBalRecPF": {"TotalIncomeBenefit": 0, "TotalTaxBenefit": 0},
+        "OthersGross": 0,
+        "OthersGrossDtls": [],
+        "PassThrIncOSChrgblSplRate": 0,
+        "PTIOthersGrossDtls": [],
+        "IncChargblSplRateOS": {"TotalAmtTaxUsDTAASchOs": _to_rupees(typed_input.os_dtaa_aggregate)},
+        "Deductions": {
+            "DeductionUs57iia": _to_rupees(deduction_57iia),
+            "Depreciation": 0,
+            "Expenses": 0,
+            "IntExp57": 0,
+            "TotDeductions": _to_rupees(deduction_57iia),
+            "UsrIntExp57": 0,
+        },
+        "AmtNotDeductibleUs58": 0,
+        "ProfitChargTaxUs59": 0,
+        "Increliefus89AOS": 0,
+        "BalanceNoRaceHorse": _to_rupees(os_excl_race_horse),
     }
+    for entry in os_head_si_entries:
+        if entry.section == "115BB":
+            block["LtryPzzlChrgblUs115BB"] += _to_rupees(entry.gross_income)
+        elif entry.section == "115BBJ":
+            block["IncChrgblUs115BBJ"] += _to_rupees(entry.gross_income)
+        elif entry.section == "115BBE":
+            block["IncChrgblUs115BBE"] += _to_rupees(entry.gross_income)
+    gift = typed_input.os_gift_breakdown
+    if gift is not None:
+        block["Aggrtvaluewithoutcons562x"] = _to_rupees(gift.aggregate_without_consideration)
+        block["Immovpropwithoutcons562x"] = _to_rupees(gift.immovable_property_without_consideration)
+        block["Immovpropinadeqcons562x"] = _to_rupees(gift.immovable_property_inadequate_consideration)
+        block["Anyotherpropwithoutcons562x"] = _to_rupees(gift.other_property_without_consideration)
+        block["Anyotherpropinadeqcons562x"] = _to_rupees(gift.other_property_inadequate_consideration)
+    if typed_input.os_pf_income_benefit or typed_input.os_pf_tax_benefit:
+        block["TaxAccumulatedBalRecPF"] = {
+            "TaxAccmltdBalRecPFDtls": [
+                {
+                    "AssessmentYear": e.assessment_year,
+                    "IncomeBenefit": _to_rupees(e.income_benefit),
+                    "TaxBenefit": _to_rupees(e.tax_benefit),
+                }
+                for e in typed_input.os_pf_accumulated_entries
+            ],
+            "TotalIncomeBenefit": _to_rupees(typed_input.os_pf_income_benefit),
+            "TotalTaxBenefit": _to_rupees(typed_input.os_pf_tax_benefit),
+        }
+
+    # Item 2e: OS-head Schedule PTI income that retains a special-rate
+    # character in the unit holder's hands -- disclosure only, matching
+    # the calculator's own dispatch for these same sections.
+    block["PassThrIncOSChrgblSplRate"] = _to_rupees(sum(
+        (
+            p.income_amount for p in (typed_input.pti_entries or [])
+            if p.income_head == "OS" and p.section in _OS_HEAD_SI_SECTIONS
+        ),
+        z,
+    ))
+
+    unexplained = typed_input.os_unexplained_income
+    if unexplained is not None:
+        block["CashCreditsUs68"] = _to_rupees(unexplained.cash_credits_us68)
+        block["UnExplndInvstmntsUs69"] = _to_rupees(unexplained.unexplained_investments_us69)
+        block["SumRecdPrYrBusTRU562xii"] = _to_rupees(unexplained.prior_year_business_trust_562xii)
+        block["SumRecdPrYrLifIns562xiii"] = _to_rupees(unexplained.prior_year_life_insurance_562xiii)
+        block["UnExplndMoneyUs69A"] = _to_rupees(unexplained.unexplained_money_us69a)
+        block["UnDsclsdInvstmntsUs69B"] = _to_rupees(unexplained.undisclosed_investments_us69b)
+        block["UnExplndExpndtrUs69C"] = _to_rupees(unexplained.unexplained_expenditure_us69c)
+        block["AmtBrwdRepaidOnHundiUs69D"] = _to_rupees(unexplained.hundi_borrowing_us69d)
+
+    section_89a = typed_input.os_section_89a
+    if section_89a is not None:
+        block["IncomeNotified89AOS"] = _to_rupees(section_89a.income_notified)
+        block["IncomeNotifiedOther89AOS"] = _to_rupees(section_89a.income_notified_other)
+        block["IncomeNotifiedPrYr89AOS"] = _to_rupees(section_89a.income_notified_prior_yr)
+        block["Increliefus89AOS"] = _to_rupees(section_89a.relief)
+        block["IncomeNotified89ATypeOS"] = [
+            {"NOT89ACountrycode": entry.country_code, "NOT89AAmount": _to_rupees(entry.amount)}
+            for entry in section_89a.country_entries
+        ]
+
+    other_income_entries = typed_input.os_other_income_entries
+    if other_income_entries:
+        block["AnyOtherIncome"] = _to_rupees(sum((e.amount for e in other_income_entries), z))
+        block["OthersInc"] = {
+            "OthersIncDtls": [
+                {"OthNatOfInc": e.nature, "OthAmount": _to_rupees(e.amount)}
+                for e in other_income_entries
+            ]
+        }
+
+    deductions_input = typed_input.os_deductions
+    if deductions_input is not None:
+        total_deductions = (
+            deduction_57iia + deductions_input.expenses + deductions_input.depreciation
+            + deductions_input.interest_expense_eligible_us57
+        )
+        block["Deductions"] = {
+            "DeductionUs57iia": _to_rupees(deduction_57iia),
+            "Depreciation": _to_rupees(deductions_input.depreciation),
+            "Expenses": _to_rupees(deductions_input.expenses),
+            "IntExp57": _to_rupees(deductions_input.interest_expense_us57),
+            "TotDeductions": _to_rupees(total_deductions),
+            "UsrIntExp57": _to_rupees(deductions_input.interest_expense_eligible_us57),
+        }
+        block["AmtNotDeductibleUs58"] = _to_rupees(deductions_input.amount_not_deductible_us58)
+        block["ProfitChargTaxUs59"] = _to_rupees(deductions_input.profit_chargeable_us59)
+
+    dividend_22e = sum(
+        (e.amount for e in typed_input.os_dividend_entries if e.section == "10(22e)"), z
+    )
+    dividend_22f = sum(
+        (e.amount for e in typed_input.os_dividend_entries if e.section == "10(22f)"), z
+    )
+    if dividend_22e or dividend_22f:
+        block["Dividend22e"] = _to_rupees(dividend_22e)
+        block["Dividend22f"] = _to_rupees(dividend_22f)
+        block["DividendOthThan22e"] = _to_rupees(
+            max(z, (source.dividend_income if source else z) - dividend_22e - dividend_22f)
+        )
+
+    # Raw (q1..q5) tuples, not a pre-built dict shape -- `DividendIncUs115A1aA`
+    # uses a DIFFERENT official `$ref` (`DateRangeType`, key `Upto15Of9`)
+    # than every sibling field here (`DateRangeTypeOS`, `Up16Of6To15Of9`),
+    # confirmed by direct schema introspection, so the correct shape helper
+    # is only chosen once, at the return-dict construction point below.
+    dividend_quarters: dict[str, tuple[Decimal, Decimal, Decimal, Decimal, Decimal]] = {}
+    for entry in typed_input.os_dividend_entries:
+        field = _OS_DIVIDEND_SECTION_DATE_RANGE_FIELD.get(entry.section)
+        if field is None:
+            continue
+        dividend_quarters[field] = (entry.q1, entry.q2, entry.q3, entry.q4, entry.q5)
+
+    for spr in typed_input.os_special_rate_entries:
+        field = _OS_DIVIDEND_SECTION_DATE_RANGE_FIELD.get(_OS_SPECIAL_RATE_DIVIDEND_SECTIONS.get(spr.source_description, ""))
+        if field is None or field in dividend_quarters or spr.source_amount <= z:
+            continue
+        dividend_quarters[field] = (z, z, z, z, spr.source_amount)
+
+    if typed_input.os_dtaa_entries:
+        block["IncChargblSplRateOS"]["NRIOsDTAA"] = {
+            "NRIDTAADtlsSchOS": [
+                {
+                    "DTAAamt": _to_rupees(e.amount),
+                    "NatureOfIncome": e.nature_of_income,
+                    "CountryName": e.country_name,
+                    "CountryCodeExcludingIndia": e.country_code,
+                    "DTAAarticle": e.dtaa_article,
+                    "RateAsPerTreaty": float(e.rate_as_per_treaty),
+                    "TaxRescertifiedFlag": e.tax_residency_certificate,
+                    "ItemNoincl": e.item_no_incl,
+                    "RateAsPerITAct": float(e.rate_as_per_it_act),
+                    "ApplicableRate": float(e.applicable_rate),
+                }
+                for e in typed_input.os_dtaa_entries
+            ]
+        }
+
+    special_rate_entries = typed_input.os_special_rate_entries
+    if special_rate_entries:
+        block["OthersGross"] = _to_rupees(sum((e.source_amount for e in special_rate_entries), z))
+        block["OthersGrossDtls"] = [
+            {"SourceDescription": e.source_description, "SourceAmount": _to_rupees(e.source_amount)}
+            for e in special_rate_entries
+        ]
+    # IncChargeableSpecialRates aggregates every OS sub-category taxed at a
+    # special (non-slab) rate: lottery/game-show (115BB), online-games
+    # (115BBJ), unexplained income (115BBE), the 115A-family NRI/FII rows,
+    # accumulated PF income u/s 111 (already correctly taxed via
+    # `_OS_HEAD_SI_SECTIONS`), and pass-through OS income at special rates.
+    block["IncChargeableSpecialRates"] = (
+        block["LtryPzzlChrgblUs115BB"]
+        + block["IncChrgblUs115BBJ"]
+        + block["IncChrgblUs115BBE"]
+        + block["OthersGross"]
+        + block["TaxAccumulatedBalRecPF"]["TotalIncomeBenefit"]
+        + block["PassThrIncOSChrgblSplRate"]
+        + _to_rupees(result.os_dtaa_income)
+    )
+    # Item "6" (BalanceNoRaceHorse) is "Net income from other sources
+    # CHARGEABLE AT NORMAL APPLICABLE RATES" -- must exclude every
+    # special-rate component folded into IncChargeableSpecialRates above,
+    # not just carry the calculator's raw blended other_sources_income
+    # total. Mirrors ITR-2's identical, already-corrected formula exactly.
+    os_excl_race_horse = os_excl_race_horse - block["IncChargeableSpecialRates"]
+    block["BalanceNoRaceHorse"] = _to_rupees(os_excl_race_horse)
+    block["InterestGross"] = (
+        block["IntrstFrmSavingBank"]
+        + block["IntrstFrmTermDeposit"]
+        + block["IntrstFrmIncmTaxRefund"]
+        + block["NatofPassThrghIncome"]
+        + block["IntrstSec10XIFirstProviso"]
+        + block["IntrstSec10XISecondProviso"]
+        + block["IntrstSec10XIIFirstProviso"]
+        + block["IntrstSec10XIISecondProviso"]
+        + block["IntrstFrmOthers"]
+    )
+    # CORRECTION (2026-09-19): unlike ITR-2's own equivalent formula
+    # (ported from `itd/itr2.py` for the rest of this function), this MUST
+    # also include `FamilyPension` -- confirmed by direct reading of the
+    # ITR-3 form PDF (Schedule OS item "1e Any other income", whose own
+    # sub-table lists "Sl. No. 1 Family Pension" as one of the components
+    # feeding item 1's gross total, not a sibling item outside it) during
+    # this session's earlier severe-bug-fix pass on this same function.
+    # ITR-2's own formula appears to share this same gap (not verified or
+    # in scope here) -- do not silently copy it back in if this function
+    # is ever re-ported from ITR-2 again.
+    block["GrossIncChrgblTaxAtAppRate"] = (
+        block["DividendGross"]
+        + block["InterestGross"]
+        + block["RentFromMachPlantBldgs"]
+        + block["Tot562x"]
+        + block["FamilyPension"]
+        + block["AnyOtherIncome"]
+    )
+
+    lottery_q = typed_input.os_lottery_quarters
+    gaming_q = typed_input.os_gaming_quarters
+
+    def _os_quarters(field: str) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
+        return dividend_quarters.get(field, (z, z, z, z, z))
+
     return {
-        "IncOthThanOwnRaceHorse": other,
+        "DividendDTAA": _os_date_range(*_os_quarters("DividendDTAA")),
+        # `DividendIncUs115A1aA` uses the OTHER official `$ref`
+        # (`DateRangeType`, key `Upto15Of9`), unlike every sibling dividend
+        # field here (`DateRangeTypeOS`, `Up16Of6To15Of9`) -- confirmed by
+        # direct schema introspection, not an inconsistency to "fix" to
+        # match its siblings.
+        "DividendIncUs115A1aA": _date_range_from_values(list(_os_quarters("DividendIncUs115A1aA"))),
+        "DividendIncUs115A1ai": _os_date_range(*_os_quarters("DividendIncUs115A1ai")),
+        "DividendIncUs115AC": _os_date_range(*_os_quarters("DividendIncUs115AC")),
+        "DividendIncUs115ACA": _os_date_range(*_os_quarters("DividendIncUs115ACA")),
+        "DividendIncUs115AD1i": _os_date_range(*_os_quarters("DividendIncUs115AD1i")),
+        "DividendIncUs115BBDA": _os_date_range(*_os_quarters("DividendIncUs115BBDA")),
+        "DividendIncUs115BBDAaiii": _os_date_range(*_os_quarters("DividendIncUs115BBDAaiii")),
+        "IncChargeable": _to_rupees(result.other_sources_income),
+        "IncFrmLottery": (
+            _os_date_range(lottery_q.q1, lottery_q.q2, lottery_q.q3, lottery_q.q4, lottery_q.q5)
+            if lottery_q else _os_date_range()
+        ),
+        # Unlike every other block in this function, `IncFrmOnGames` uses
+        # the OTHER official `$ref` (`DateRangeType`, key `Upto15Of9`) --
+        # confirmed by direct schema introspection, not an inconsistency to
+        # "fix" back to `_os_date_range()`'s `Up16Of6To15Of9` shape.
+        "IncFrmOnGames": (
+            _date_range_from_values([gaming_q.q1, gaming_q.q2, gaming_q.q3, gaming_q.q4, gaming_q.q5])
+            if gaming_q else _date_range_from_values([z, z, z, z, z])
+        ),
+        "IncFromOwnHorse": {
+            "Receipts": _to_rupees(race_horse.receipts) if race_horse else 0,
+            "DeductSec57": _to_rupees(race_horse.deduction_us57) if race_horse else 0,
+            "AmtNotDeductibleUs58": _to_rupees(race_horse.amount_not_deductible_us58) if race_horse else 0,
+            "ProfitChargTaxUs59": _to_rupees(race_horse.profit_chargeable_us59) if race_horse else 0,
+            "BalanceOwnRaceHorse": _to_rupees(race_horse.balance) if race_horse else 0,
+        },
+        "IncOthThanOwnRaceHorse": block,
+        "NOT89A": _os_date_range(),
         # Form item 7 = "Income from other sources (other than from owning
         # race horses) (2 + 6)" -- item 2 is IncChargeableSpecialRates,
         # item 6 is BalanceNoRaceHorse. Mirrors ITR-2's own live-UAT-fixed
-        # formula exactly (`itd/itr2.py`, confirmed live against ITD's
-        # Type-2 UAT `validateItr`, errCd
-        # ITR2_PDM_Group1.ScheduleOS_TotOthSrcNoRaceHorse).
-        "TotOthSrcNoRaceHorse": _to_rupees(inc_chargeable_special_rates + balance_no_race_horse),
-        "IncFromOwnHorse": {"Receipts": zero, "DeductSec57": zero, "AmtNotDeductibleUs58": zero, "ProfitChargTaxUs59": zero, "BalanceOwnRaceHorse": zero},
-        "IncChargeable": _to_rupees(result.other_sources_income),
-        "IncFrmLottery": {"DateRange": {"Upto15Of6": zero, "Up16Of6To15Of9": zero, "Up16Of9To15Of12": zero, "Up16Of12To15Of3": zero, "Up16Of3To31Of3": zero}},
-        # CORRECTION (2026-09-19): every one of these 8 blocks previously used
-        # a wrong key ("Upto15Of9", and "DividendIncUs115ACA" additionally
-        # "Up16Of9To15Of3") that doesn't exist anywhere in the official
-        # `DateRangeTypeOS` schema shape (`Up16Of6To15Of9`/`Up16Of9To15Of12`
-        # instead) -- confirmed by direct schema introspection, matching
-        # `IncFrmLottery`'s own already-correct keys above. This made
-        # Schedule OS's JSON unconditionally schema-invalid whenever ANY of
-        # these blocks was present (`additionalProperties: false`), for
-        # every ITR-3 return produced by this engine, not merely an
-        # incomplete disclosure.
-        "DividendIncUs115BBDA": {"DateRange": {"Upto15Of6": zero, "Up16Of6To15Of9": zero, "Up16Of9To15Of12": zero, "Up16Of12To15Of3": zero, "Up16Of3To31Of3": zero}},
-        "DividendIncUs115BBDAaiii": {"DateRange": {"Upto15Of6": zero, "Up16Of6To15Of9": zero, "Up16Of9To15Of12": zero, "Up16Of12To15Of3": zero, "Up16Of3To31Of3": zero}},
-        "DividendIncUs115A1ai": {"DateRange": {"Upto15Of6": zero, "Up16Of6To15Of9": zero, "Up16Of9To15Of12": zero, "Up16Of12To15Of3": zero, "Up16Of3To31Of3": zero}},
-        "DividendIncUs115AC": {"DateRange": {"Upto15Of6": zero, "Up16Of6To15Of9": zero, "Up16Of9To15Of12": zero, "Up16Of12To15Of3": zero, "Up16Of3To31Of3": zero}},
-        "DividendIncUs115ACA": {"DateRange": {"Upto15Of6": zero, "Up16Of6To15Of9": zero, "Up16Of9To15Of12": zero, "Up16Of12To15Of3": zero, "Up16Of3To31Of3": zero}},
-        "DividendIncUs115AD1i": {"DateRange": {"Upto15Of6": zero, "Up16Of6To15Of9": zero, "Up16Of9To15Of12": zero, "Up16Of12To15Of3": zero, "Up16Of3To31Of3": zero}},
-        "NOT89A": {"DateRange": {"Upto15Of6": zero, "Up16Of6To15Of9": zero, "Up16Of9To15Of12": zero, "Up16Of12To15Of3": zero, "Up16Of3To31Of3": zero}},
-        "DividendDTAA": {"DateRange": {"Upto15Of6": zero, "Up16Of6To15Of9": zero, "Up16Of9To15Of12": zero, "Up16Of12To15Of3": zero, "Up16Of3To31Of3": zero}},
+        # formula exactly (confirmed live against ITD's Type-2 UAT
+        # `validateItr`, errCd ITR2_PDM_Group1.ScheduleOS_TotOthSrcNoRaceHorse).
+        "TotOthSrcNoRaceHorse": _to_rupees(
+            block["IncChargeableSpecialRates"] + max(z, os_excl_race_horse)
+        ),
     }
 
 
@@ -2887,7 +3153,7 @@ def _schedule_80ggc(source: Any) -> dict | None:
     return {"Schedule80GGCDetails": rows, "TotalDonationAmtCash80GGC": cash, "TotalDonationAmtOtherMode80GGC": other, "TotalDonationsUs80GGC": cash + other, "TotalEligibleDonationAmt80GGC": cash + other}
 
 
-def _partb_ti(result: ITR3Result) -> dict:
+def _partb_ti(result: ITR3Result, typed_input: ITR3Input | None = None) -> dict:
     """Serialize Part B-TI from the calculator's typed schedule results.
 
     The form is a disclosure of the post-set-off heads, not a second tax
@@ -2937,34 +3203,23 @@ def _partb_ti(result: ITR3Result) -> dict:
     current_loss = max(z, result.cyla_total_set_off)
     balance_after_cyla = max(z, result.gti_before_loss_setoff - result.cyla_total_set_off)
     si_income = sum((getattr(entry, "taxable_income", z) for entry in getattr(result.schedules.get("si"), "entries", [])), z)
-    # Part B-TI item 5b is explicitly ``Income chargeable at special rates
-    # (2 of Schedule OS)``.  Schedule SI is broader: it also repeats special
-    # rates whose source head is Schedule CG (111A/112A) and Schedule CG's
-    # section 115BBH VDA row.  Those amounts already belong to Part B-TI item
-    # 4 and must not be duplicated in IncFromOS.  The calculator's remaining
-    # supported SI sections (115BB/115BBE/115BBF) are Schedule OS entries.
-    os_special_rate_sections = {"115BB", "115BBE", "115BBF", "115BBG", "115BBJ", "115BBA", "115E"}
-    os_si_income = sum(
-        (
-            getattr(entry, "taxable_income", z)
-            for entry in getattr(result.schedules.get("si"), "entries", [])
-            if getattr(entry, "section", "") in os_special_rate_sections
-        ),
-        z,
-    )
-    # ``si_income`` remains the full Schedule SI total for Part B-TI item 11
-    # and the official Part B-TTI tax inputs; only the Schedule OS projection
-    # uses the narrower subset above.
     si_income = max(z, si_income)
-    os_si_income = max(z, os_si_income)
-    # `result.other_sources_income` is now BLENDED (per `_OS_HEAD_SI_SECTIONS`
-    # in `calculators/itr3.py`, it includes 115BB/115BBE/115BBF's own gross
-    # income, needed for correct GTI/Total Income) -- so the special-rate
-    # portion (`os_si_income`) must be subtracted back out here, otherwise
-    # `TotIncFromOS = other_income + os_si_income` below would double-count
-    # exactly what `_OS_HEAD_SI_SECTIONS` added, the same bug class the
-    # calculator's own GTI-inclusion fix was written to prevent.
-    other_income = max(z, result.other_sources_income - os_si_income)
+    # Form items 4a/4b/4c (schema IncFromOS.OtherSrcThanOwnRaceHorse/
+    # IncChargblSplRate/FromOwnRaceHorse) are, per the official form, "6 of
+    # Schedule OS" / "2 of Schedule OS" / "8e of Schedule OS" -- sourced
+    # from `_schedule_os()`'s own already-computed totals so this split can
+    # never drift from what Schedule OS itself discloses, and so it
+    # correctly covers EVERY special-rate OS category (the NRI/FII 115A-family
+    # dropdown and DTAA-OS income included, neither of which is a bare
+    # `si_entries` section name a narrower local filter could enumerate).
+    # Mirrors ITR-2's identical, already-corrected `_partb_ti()` pattern.
+    os_schedule = _schedule_os(result, typed_input)
+    os_special_rate = os_schedule["IncOthThanOwnRaceHorse"]["IncChargeableSpecialRates"] if os_schedule else 0
+    os_race_horse_income = max(0, os_schedule["IncFromOwnHorse"]["BalanceOwnRaceHorse"]) if os_schedule else 0
+    os_normal_rate = (
+        max(0, os_schedule["IncOthThanOwnRaceHorse"]["BalanceNoRaceHorse"])
+        if os_schedule else 0
+    )
     return {
         "Salaries": _to_rupees(max(z, result.salary_income)),
         "IncomeFromHP": _to_rupees(max(z, result.house_property_income)),
@@ -2982,7 +3237,7 @@ def _partb_ti(result: ITR3Result) -> dict:
             "CapGains30Per115BBH": _to_rupees(vda),
             "TotalCapGains": _to_rupees(total_cg),
         },
-        "IncFromOS": {"OtherSrcThanOwnRaceHorse": _to_rupees(other_income), "IncChargblSplRate": _to_rupees(os_si_income), "FromOwnRaceHorse": 0, "TotIncFromOS": _to_rupees(other_income + os_si_income)},
+        "IncFromOS": {"OtherSrcThanOwnRaceHorse": os_normal_rate, "IncChargblSplRate": os_special_rate, "FromOwnRaceHorse": os_race_horse_income, "TotIncFromOS": _to_rupees(result.other_sources_income)},
         "CurrentYearLoss": _to_rupees(current_loss),
         "BalanceAfterSetoffLosses": _to_rupees(balance_after_cyla),
         "BroughtFwdLossesSetoff": _to_rupees(max(z, result.bfla_total_set_off)),
@@ -3266,7 +3521,7 @@ def build_itr3_json(
         "ScheduleCYLA": _schedule_cyla(result),
         "ScheduleBFLA": _schedule_bfla(result),
         "ScheduleCFL": _schedule_cfl(result, typed_input),
-        "PartB-TI": _partb_ti(result),
+        "PartB-TI": _partb_ti(result, typed_input),
         "PartB_TTI": _partb_tti(result, typed_input),
         "Verification": _verification(
             assessee_name=assessee_name or "ASSESSEE",

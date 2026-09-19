@@ -48,6 +48,9 @@ from app.schemas.itr2 import (
     ForeignAssetEntry, AssetLiabilityInput, Schedule5AInput, ESOPDeferralInput,
     TaxPaymentDetail, TDS3FilingDetail,
     ResidentialStatus, ReturnFileSection,
+    OSGiftBreakdown, OSAccumulatedPFEntry, OSUnexplainedIncome, OSQuarterlyAmount,
+    OS89ACountryEntry, OSSection89A, OSOtherIncomeEntry, OSDividendEntry,
+    OSDtaaEntry, OSSpecialRateEntry, OSDeductions, OSRaceHorseActivity,
 )
 
 
@@ -1997,6 +2000,30 @@ class ITR3Input(BaseModel):
     salary_income: Optional[SalaryIncome] = Field(default=None)
     house_property_income: Optional[HousePropertyIncome] = Field(default=None)
     other_sources_income: Optional[OtherSourcesIncome] = Field(default=None)
+    # --- Schedule OS richer sub-categories (ported from ITR-2's own
+    # already-correct field set, tracker row #24's follow-on build-out) ---
+    os_gift_breakdown: Optional[OSGiftBreakdown] = None
+    os_pf_income_benefit: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pf_tax_benefit: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pf_accumulated_entries: List[OSAccumulatedPFEntry] = Field(default_factory=list)
+    os_unexplained_income: Optional[OSUnexplainedIncome] = None
+    os_section_89a: Optional[OSSection89A] = None
+    os_other_income_entries: List[OSOtherIncomeEntry] = Field(default_factory=list)
+    os_dividend_entries: List[OSDividendEntry] = Field(default_factory=list)
+    os_dtaa_entries: List[OSDtaaEntry] = Field(default_factory=list)
+    os_dtaa_aggregate: Decimal = Field(default=Decimal("0"), ge=0)
+    os_deductions: Optional[OSDeductions] = None
+    os_race_horse: Optional[OSRaceHorseActivity] = None
+    os_pf_interest_10_11_first_proviso: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pf_interest_10_11_second_proviso: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pf_interest_10_12_first_proviso: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pf_interest_10_12_second_proviso: Decimal = Field(default=Decimal("0"), ge=0)
+    os_interest_from_others: Decimal = Field(default=Decimal("0"), ge=0)
+    os_lottery_quarters: Optional[OSQuarterlyAmount] = None
+    os_gaming_quarters: Optional[OSQuarterlyAmount] = None
+    os_machinery_plant_rent: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pass_through_income: Decimal = Field(default=Decimal("0"), ge=0)
+    os_special_rate_entries: List[OSSpecialRateEntry] = Field(default_factory=list)
 
     # --- Capital Gains (full CG) ---
     cg_transactions: Optional[List[CGTransaction]] = Field(default=None)
