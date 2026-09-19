@@ -2304,7 +2304,16 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
     total_stcg = getattr(stcg, "total_stcg", zero)
     total_ltcg = getattr(ltcg, "total_ltcg", zero)
     total_cg = getattr(cg_result, "total_capital_gains", zero)
-    vda_income = getattr(cg_result, "vda_income", zero)
+    # `CGResult`'s own field is named `vda` (not `vda_income`, which was a
+    # genuine pre-existing attribute-name mismatch -- the old `getattr`
+    # fallback silently returned zero here, so item C2 (`IncmFromVDATrnsf`)
+    # always disclosed 0 regardless of real VDA capital-gains income, even
+    # though `SumOfCGIncm`/`TotScheduleCGFor23` below (sourced from
+    # `total_capital_gains`, which DOES include it) were already correct).
+    # `cg_result.vda` is also now the CG-classified portion only (`head`
+    # "CG", not "BI") -- correct for this item, which the official form's
+    # own cross-reference ties specifically to Schedule VDA item B.
+    vda_income = getattr(cg_result, "vda", zero)
 
     # Build Table F from the same explicit transaction/VDA dates. It is an
     # accrual disclosure, so losses are excluded and remain Decimal-valued.
@@ -2321,6 +2330,8 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         bucket = "ltcg125" if is_long else ("stcg20" if asset_type in ("listed_equity_111a", "equity_oriented_fund_111a") else "stcg_app")
         buckets[bucket][_quarter_index(tx.date_of_transfer)] += gain
     for item in typed_input.vda_transactions or []:
+        if item.head == "BI":
+            continue  # Table F is Schedule CG's own accrual table -- business-classified VDA has no capital-gains accrual to disclose here.
         income = item.income_from_vda if item.income_from_vda is not None else max(zero, item.consideration_received - item.acquisition_cost)
         buckets["vda"][_quarter_index(item.date_of_transfer)] += income
 
@@ -2812,7 +2823,19 @@ def _partb_ti(result: ITR3Result) -> dict:
     stcg = getattr(cg, "stcg", None)
     ltcg = getattr(cg, "ltcg", None)
     business_total = max(z, result.business_income)
-    normal_business = max(z, getattr(pgbp, "non_spec_net_income", business_total))
+    # `result.business_income` already includes VDA business-income (head
+    # "BI") transactions, credited there directly by the calculator -- but
+    # when a business exists, `normal_business` below sources from PGBP's
+    # own `non_spec_net_income` instead (bypassing `result.business_income`
+    # entirely, which is the `pgbp is None` fallback's only path to it), so
+    # that credit must be added back explicitly in the PGBP branch to keep
+    # this disclosure arithmetically consistent with the calculator's own
+    # `gross_total_income` -- but NOT in the fallback branch, where
+    # `business_total` already includes it (adding it there would double it).
+    vda_income_bi = max(z, getattr(result, "vda_income_bi", z))
+    normal_business = (
+        max(z, pgbp.non_spec_net_income) + vda_income_bi if pgbp is not None else business_total
+    )
     speculative = max(z, getattr(pgbp, "speculative_net_income", z))
     specified = max(z, getattr(pgbp, "specified_business_net_income", z))
     stcg_20 = max(z, getattr(stcg, "income_20per", z))
@@ -2827,7 +2850,10 @@ def _partb_ti(result: ITR3Result) -> dict:
     # gross Schedule CG amount; the ₹1.25 lakh threshold belongs to Schedule
     # SI's tax computation and must not be substituted into this disclosure.
     total_ltcg = ltcg_125 + ltcg_112a_gross + ltcg_dtaa
-    vda = max(z, result.vda_income)
+    # `CapGain` is a capital-gains-head disclosure -- only the CG-classified
+    # portion of VDA income belongs here; the BI-classified portion is
+    # already credited into `normal_business` above.
+    vda = max(z, getattr(result, "vda_income_cg", result.vda_income))
     total_cg = total_stcg + total_ltcg + vda
     other_income = max(z, result.other_sources_income)
     current_loss = max(z, result.cyla_total_set_off)
@@ -2988,7 +3014,7 @@ class _DummyCG:
     stcg = _STCG()
     ltcg = _LTCG()
     total_capital_gains = Decimal("0")
-    vda_income = Decimal("0")
+    vda = Decimal("0")
 
 
 def build_itr3_json(

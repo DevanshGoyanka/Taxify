@@ -86,6 +86,8 @@ class ITR3Result:
     capital_gains_income: Decimal = Decimal("0")
     other_sources_income: Decimal = Decimal("0")
     vda_income: Decimal = Decimal("0")
+    vda_income_cg: Decimal = Decimal("0")
+    vda_income_bi: Decimal = Decimal("0")
     clubbing_income: Decimal = Decimal("0")
     partner_firm_income: Decimal = Decimal("0")
 
@@ -533,13 +535,24 @@ def compute(input_data: ITR3Input) -> ITR3Result:
             total_deductions=scrip.total_deductions,
         ))
 
+    vda_entries_bi_list: list[VDAEntry] = []
     for vda in (input_data.vda_transactions or []):
-        vda_entries_list.append(VDAEntry(
+        entry = VDAEntry(
             date_of_acquisition=str(vda.date_of_acquisition),
             date_of_transfer=str(vda.date_of_transfer),
             acquisition_cost=vda.acquisition_cost,
             consideration_received=vda.consideration_received,
-        ))
+        )
+        vda_entries_list.append(entry)
+        # Per the official form's own cross-reference note (Schedule VDA
+        # item A -> Schedule BP item A3g; item B -> Schedule CG item C2),
+        # ITR-3 (unlike ITR-2, whose schema has no business-income VDA
+        # head at all) splits VDA income by `head` for DISCLOSURE/GTI-head
+        # classification -- the flat 30% tax itself (`si_vda` below) is
+        # unaffected by `head`, since section 115BBH applies regardless of
+        # whether the VDA was held as a capital asset or stock-in-trade.
+        if vda.head == "BI":
+            vda_entries_bi_list.append(entry)
 
     stcg_result = compute_stcg(stcg_111a=stcg_111a_val, stcg_land_building=stcg_land_cg,
                                 stcg_other=stcg_other, stcg_fii_securities=stcg_fii_securities)
@@ -596,6 +609,25 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     )
 
     vda_income = compute_vda(vda_entries=vda_entries_list)
+    # Section 115BBH's flat 30% rate (`si_vda(vda_income)` below) applies
+    # to the FULL total regardless of `head` -- but the official form's
+    # own cross-reference (Schedule VDA item A -> Schedule BP item A3g;
+    # item B -> Schedule CG item C2) requires business-classified VDA
+    # income to be counted under the Business Income head, not Capital
+    # Gains, for GTI-head disclosure purposes. Credited directly to
+    # `r.business_income` (parallel to how VDA-CG is credited directly to
+    # `r.capital_gains_income` below) rather than via the separate,
+    # pre-existing `reallocation_income_115bbh` manual field -- that field
+    # nets P&L-embedded 115BBH income back OUT of `net_profit_before_tax`
+    # and is left untouched, since assuming every VDA-BI transaction is
+    # already embedded in the taxpayer's P&L would risk silently
+    # understating business income for a taxpayer whose P&L does not
+    # include it.
+    vda_income_bi = compute_vda(vda_entries=vda_entries_bi_list)
+    vda_income_cg = max(z, vda_income - vda_income_bi)
+    r.business_income += vda_income_bi
+    r.vda_income_bi = vda_income_bi
+    r.vda_income_cg = vda_income_cg
     # Sections 54/54B/54EC/54F (unlike 54D/54G/54GA below) have a canonical
     # `CGTransaction.exemptions` claim shape and are legally claimable
     # against ANY eligible asset type, not just land/building -- e.g. 54F
@@ -669,7 +701,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # asset.exemption_total (Table E's own per-asset mechanism), since
     # _normalized_land_exemptions() now recognizes these three sections.
     exemptions.total_exemption += exempt_54d + exempt_54g + exempt_54ga
-    cg_result = aggregate_cg(stcg_result, ltcg_result, vda_income, exemptions)
+    cg_result = aggregate_cg(stcg_result, ltcg_result, vda_income_cg, exemptions)
 
     # Cross-form issue #11 (tracker): Schedule PTI capital gains
     # (income_head "STCG"/"LTCG") retain the SAME head AND rate the
@@ -873,7 +905,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # BEFORE `post_loss_cg_baskets()` ever applies this same netting.
     # Mirrors ITR-2's identical correction (calculators/itr2.py).
     _cg_bucket_keys = ("normal_stcg", "111a", "112", "112a_gross", "stcg_dtaa", "ltcg_dtaa")
-    r.capital_gains_income = sum((post_loss_cg[k] for k in _cg_bucket_keys), z) + vda_income + pti_cg_gross
+    r.capital_gains_income = sum((post_loss_cg[k] for k in _cg_bucket_keys), z) + vda_income_cg + pti_cg_gross
     total_cg_exemption_relief = post_loss_cg.get("exemption_used", z)
     gti_after = max(z, gti_after - total_cg_exemption_relief)
     r.gti_after_loss_setoff = gti_after
