@@ -2446,6 +2446,31 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
     deemed_stcg_depreciable = (
         dcg_schedule.SummaryFromDeprSchCG.TotalDepreciation if dcg_schedule is not None else Decimal("0")
     )
+    # Schedule CG item A5 ("NRISecur115AD") -- "For NON-RESIDENTS, from sale
+    # of securities (other than those at A3 above) by an FII as per section
+    # 115AD" (confirmed against the official ITR-3 form PDF, page 99, item
+    # 5) -- deliberately LEFT hardcoded zero below, unlike A3/B4/B7. ITR-2's
+    # own equivalent uses the identical, schema-confirmed byte-for-byte
+    # `EquityOrUnitSec94Type` shape (`_other_assets_block(...,
+    # asset_types=_FII_SECURITIES_ASSET_TYPES)`), which made porting the
+    # DISCLOSURE trivial -- but unlike A3 (111A, flat 20% either way) and
+    # B4/B7 (112A, flat 12.5%/threshold either way), this specific item is
+    # NOT rate-neutral: `compute_115ad_stcg_other()`'s own docstring
+    # confirms section 115AD(1)(ii) taxes these securities at a flat 30%
+    # for an FII/FPI, "[u]nlike an ordinary taxpayer's 'other' STCG
+    # (slab-rate, never Schedule SI)" -- and ITR-3's calculator
+    # (`calculators/itr3.py`) has ZERO `is_fii_fpi` references anywhere,
+    # always taxing this bucket at ordinary slab rate. Wiring up A5's
+    # disclosure alone (as a first attempt here did) would have shown real
+    # FII-securities figures implying 30% flat-rate tax while the
+    # calculator kept taxing them at slab rate -- a genuine, severe
+    # disclosure/tax divergence, not merely an incomplete feature.
+    # Replicating ITR-2's full FII-rate machinery (compute_115ad_stcg_
+    # other(), the matching CYLA/BFLA "stcg30" bucket routing, Schedule-SI
+    # dispatch) for ITR-3 is a materially larger undertaking than A3/B4/B7's
+    # pure disclosure fixes and is deliberately NOT attempted here --
+    # flagged as its own, separately-scoped item rather than shipped
+    # incomplete.
     stcg_other = build_itr3_other_assets_stcg_block(typed_input.cg_transactions or [], deemed_stcg_depreciable)
     # Schedule CG item B6 ("NRIOnSec112and115") -- LTCG on unlisted
     # securities u/s 112(1)(c), bonds/GDRs u/s 115AC, or FII securities
@@ -2509,23 +2534,26 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         _UNUTILIZED_CG_LTCG_SECTIONS, require_amt_utilized=True,
     )
     # Schedule CG item A3 -- STCG on equity shares/equity-oriented fund
-    # units/business trust units, STT paid (s.111A). Still unconditionally
-    # MFSectionCode "1A" (never the "5AD1biip" proviso) here -- NOTE this
-    # comment previously claimed ITR-3 "has no real filing-profile-level
-    # FII/FPI flag... unlike ITR-2", which is WRONG (`typed_input.is_fii_fpi`
-    # is real, see this function's own `is_fii_fpi` variable added when
-    # fixing tracker #21-22/B4-B7 below) -- left as a separate, genuinely
-    # unverified item rather than silently fixed here: item A4
-    # ("NRISecur115AD", FII non-112A securities) is ALSO still hardcoded
-    # zero regardless of `is_fii_fpi`, and both are architecturally
-    # unrelated to Schedule 112A/115AD's own per-scrip tables (unlike B4/B7,
-    # which the form explicitly cites as sourced FROM those schedules) --
-    # flagged for a dedicated future check, not expanded into this fix.
-    # Derived from the same shared cg_transactions the calculator's own A3
-    # tax figure (stcg_111a_val, calculators/itr3.py) already uses, via the
-    # same helper ITR-2's builder uses, so the two forms can never silently
-    # diverge on this schedule's arithmetic.
-    equity_111a_rows = build_equity_mf_stt_rows(typed_input.cg_transactions or [], is_fii_fpi=False)
+    # units/business trust units, STT paid. Confirmed via the official
+    # form's own item-3 text directly (`Reference Docs by CBDT & ITD/
+    # Official ITR FORMS/ITR-3-2026-Eng.pdf`, page 99): "on which STT is
+    # paid under section 111A OR 115AD(1)(ii) proviso (FOR FII)" -- item A3
+    # itself is the SAME combined item for both ordinary and FII STT-paid
+    # equity, distinguished only by `EquityMFonSTTDtls`'s own
+    # `MFSectionCode` field ("1A" vs "5AD1biip") -- a genuine, confirmed
+    # gap, now fixed by passing this function's own `is_fii_fpi` local
+    # through instead of hardcoding `False`. Disclosure-only: the
+    # underlying tax rate is unaffected either way (`compute_111a()` always
+    # taxes it under the flat 20% `S111A` SecCode regardless of FII status,
+    # confirmed by direct reading of `special_rates.py` -- Schedule SI's
+    # own tax dispatch and Schedule CG's own disclosure tag are independent
+    # mechanisms here, matching the identical pattern already found for
+    # PTI capital gains earlier this session). Derived from the same shared
+    # cg_transactions the calculator's own A3 tax figure (stcg_111a_val,
+    # calculators/itr3.py) already uses, via the same helper ITR-2's
+    # builder uses, so the two forms can never silently diverge on this
+    # schedule's arithmetic.
+    equity_111a_rows = build_equity_mf_stt_rows(typed_input.cg_transactions or [], is_fii_fpi=is_fii_fpi)
     stcg_block: dict[str, Any] = {
         "SaleofLandBuild": {"SaleofLandBuildDtls": stcg_rows},
         "EquityMFonSTT": equity_111a_rows,

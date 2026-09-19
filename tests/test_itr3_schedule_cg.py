@@ -710,3 +710,47 @@ def test_112a_b4_and_b7_dispatch_on_is_fii_fpi_consistently_with_schedule() -> N
     assert itr3_doc["Schedule115AD"]["Balance115AD"] == 1500000
     errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(itr3_doc["ScheduleCGFor23"]))
     assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_a3_equity_mf_on_stt_mf_section_code_dispatches_on_is_fii_fpi() -> None:
+    """Schedule CG item A3 ("EquityMFonSTT") is explicitly a combined item
+    per the official form's own text (page 99): "on which STT is paid
+    under section 111A OR 115AD(1)(ii) proviso (for FII)" -- confirmed a
+    genuine gap, distinct from item A5's own rate-changing FII item
+    (deliberately left unfixed, see this file's own comment): A3's
+    underlying tax rate is unaffected by FII status either way
+    (`compute_111a()` always taxes it flat 20% regardless), so only the
+    disclosure `MFSectionCode` tag needed to change, not any tax
+    computation."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.LISTED_EQUITY_111A,
+        full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("300000"),
+        date_of_acquisition=_dt(2025, 6, 1), date_of_transfer=_dt(2026, 1, 1),
+        explicit_long_term=False,
+    )]
+    typed_input.is_fii_fpi = True
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    stcg = document["ITR"]["ITR3"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    assert stcg["EquityMFonSTT"][0]["MFSectionCode"] == "5AD1biip"
+    assert stcg["EquityMFonSTT"][0]["EquityMFonSTTDtls"]["CapgainonAssets"] == 200000
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(document["ITR"]["ITR3"]["ScheduleCGFor23"]))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_a3_equity_mf_on_stt_default_mf_section_code_when_not_fii_fpi() -> None:
+    """No regression on the default (`is_fii_fpi=False`) path."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.LISTED_EQUITY_111A,
+        full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("300000"),
+        date_of_acquisition=_dt(2025, 6, 1), date_of_transfer=_dt(2026, 1, 1),
+        explicit_long_term=False,
+    )]
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    stcg = document["ITR"]["ITR3"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    assert stcg["EquityMFonSTT"][0]["MFSectionCode"] == "1A"
