@@ -648,6 +648,29 @@ def test_nri_115f_net_sale_value_taxed_at_section_112(form) -> None:
     assert si["112"].taxable_income == D("500000")
 
 
+@pytest.mark.parametrize("form", _FORMS)
+def test_cg_result_total_capital_gains_matches_actual_taxed_amount(form) -> None:
+    """`result.schedules["cg"].total_capital_gains` -- the CGResult's own
+    top-level total, distinct from `result.capital_gains_income` -- must
+    always agree with the actual taxed amount, not just for ordinary
+    cg_transactions. Found stale for ITR-2 specifically: its calculator
+    builds `cg_result` from ONLY the ordinary transaction list BEFORE the
+    NRI-proviso-48/DTAA/unutilized-CGAS blocks mutate `stcg_result`/
+    `ltcg_result` in place, and the later VDA-stage reconstruction just
+    added VDA on top of that stale figure rather than re-aggregating.
+    Confirmed harmless for actual output today (neither the builder's own
+    disclosure nor any tax path reads this field), but a landmine for
+    future code assuming it's authoritative -- and the official schema
+    itself defines Schedule CG's own totals (SumOfCGIncm = item A9 STCG +
+    item B12 LTCG net of exemption) as exactly what this field is meant to
+    hold, so it should never silently diverge from `capital_gains_income`."""
+    r = _compute(
+        form, residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_nri_stcg_stt_paid=D("500000"),
+    )
+    assert r.schedules["cg"].total_capital_gains == r.capital_gains_income == D("500000")
+
+
 def _dtaa_entry(**kw) -> CGDtaaEntry:
     defaults = dict(
         amount=D("1000000"), item_no_incl="B1g", country_name="Mauritius",

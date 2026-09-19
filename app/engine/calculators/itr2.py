@@ -770,15 +770,34 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         ))
     vda_income = _compute_vda_income(vda_entries)
     r.vda_income = vda_income
-    cg_result = type(cg_result)(
-        stcg=cg_result.stcg,
-        ltcg=cg_result.ltcg,
-        vda=vda_income,
-        exemptions=cg_result.exemptions,
-        current_year_losses=cg_result.current_year_losses,
-        total_capital_gains=cg_result.total_capital_gains + vda_income,
-        total_capital_gains_before_exemption=cg_result.total_capital_gains_before_exemption + vda_income,
-    )
+    # Re-aggregate from the final, fully-adjusted `stcg_result`/`ltcg_result`
+    # (NRI proviso-48/DTAA/unutilized-CGAS mutations above already applied
+    # in place) rather than patching the ORIGINAL `cg_result.total_capital_
+    # gains`/`total_capital_gains_before_exemption` -- those two fields were
+    # computed once, early, from only the ordinary `cg_transactions` list
+    # (`_compute_cg_schedule()`'s own internal `aggregate()` call, before
+    # any of the NRI/DTAA blocks above ran), and were never refreshed
+    # afterward; the old `type(cg_result)(..., total_capital_gains=
+    # cg_result.total_capital_gains + vda_income, ...)` reconstruction just
+    # added VDA on top of that STALE figure. Confirmed via direct
+    # computation: an NRI-STT-paid-STCG-only return (no ordinary
+    # transactions) left `cg_result.total_capital_gains` at 0 even though
+    # `r.capital_gains_income` (sourced independently from
+    # `post_loss_cg_baskets()`, unaffected by this bug) was correctly
+    # 500000 -- confirmed harmless today only because neither this
+    # builder's own disclosure (`SumOfCGIncm`/`TotScheduleCGFor23`, both
+    # sourced from `result.capital_gains_income`) nor any tax-computation
+    # path reads `cg_result.total_capital_gains` at all, but a landmine for
+    # any future code that assumes it's authoritative. `_aggregate_cg()`
+    # (the same shared function ITR-3's own already-correct
+    # `aggregate_cg(stcg_result, ltcg_result, vda_income, exemptions)` call
+    # uses, `calculators/itr3.py`) re-derives `total_capital_gains`/
+    # `total_capital_gains_before_exemption`/`current_year_losses` fresh
+    # from the final `stcg_result`/`ltcg_result` -- matching the official
+    # ITR-2 schema's own definition (`SumOfCGIncm` = Schedule CG item A9
+    # STCG total + item B12 LTCG total, net of exemption;
+    # `TotScheduleCGFor23` = `SumOfCGIncm` + VDA).
+    cg_result = _aggregate_cg(stcg_result, ltcg_result, vda_income, cg_result.exemptions)
     r.schedules["cg"] = cg_result
 
     # ── 3. Clubbing (SPI) ────────────────────────────────────────────────────
