@@ -754,3 +754,98 @@ def test_a3_equity_mf_on_stt_default_mf_section_code_when_not_fii_fpi() -> None:
     document = build_itr3_json(compute_itr3(typed_input), typed_input)
     stcg = document["ITR"]["ITR3"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
     assert stcg["EquityMFonSTT"][0]["MFSectionCode"] == "1A"
+
+
+# ---------------------------------------------------------------------------
+# Item 5 ("NRISecur115AD") -- full FII/FPI flat-30% tax machinery, ported
+# from ITR-2's own already-correct, live-UAT-tested calculator, plus the
+# matching disclosure (deferred, then completed, after the tax side landed)
+# ---------------------------------------------------------------------------
+
+def test_115ad_fii_securities_taxed_flat_30_not_slab() -> None:
+    """Section 115AD(1)(ii): an FII/FPI's own "other" STCG on securities
+    (unlisted shares/listed securities/debt MFs/bonds -- STT not paid) is a
+    flat 30% special rate via Schedule SI, unlike an ordinary taxpayer's
+    identical basket (slab-rate). `calculators/itr3.py` previously had
+    zero `is_fii_fpi` awareness at all, always taxing this bucket at slab
+    rate regardless."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.UNLISTED_SHARES,
+        full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("1000000"),
+        date_of_acquisition=_dt(2025, 6, 1), date_of_transfer=_dt(2026, 1, 1),
+        explicit_long_term=False,
+    )]
+    typed_input.is_fii_fpi = True
+    result = compute_itr3(typed_input)
+    si_by_section = {e.section: e for e in result.schedules["si"].entries}
+    assert si_by_section["5ADii"].gross_income == Decimal("1000000")
+    assert si_by_section["5ADii"].tax_rate_pct == Decimal("30")
+    assert si_by_section["5ADii"].tax_amount == Decimal("300000")
+    assert result.special_rate_tax == Decimal("300000")
+
+
+def test_115ad_ordinary_taxpayer_same_transaction_stays_slab_rate() -> None:
+    """No regression: the identical transaction for a non-FII/FPI taxpayer
+    must still fall through to ordinary slab rate, with no 5ADii SI
+    entry."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.UNLISTED_SHARES,
+        full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("1000000"),
+        date_of_acquisition=_dt(2025, 6, 1), date_of_transfer=_dt(2026, 1, 1),
+        explicit_long_term=False,
+    )]
+    result = compute_itr3(typed_input)
+    assert "5ADii" not in {e.section for e in result.schedules["si"].entries}
+    assert result.special_rate_tax == Decimal("0")
+    assert result.slab_tax > Decimal("0")
+
+
+def test_115ad_disclosure_and_tax_agree_a5_vs_a6_split() -> None:
+    """Schedule CG item A5 ("NRISecur115AD") now carries the real FII
+    securities figure (previously hardcoded zero), correctly EXCLUDED from
+    item A6 ("SaleOnOtherAssets") to avoid double-counting the same
+    transaction in both -- and the disclosed amount matches exactly what
+    Schedule SI actually taxes at 30%."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.UNLISTED_SHARES,
+        full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("1000000"),
+        date_of_acquisition=_dt(2025, 6, 1), date_of_transfer=_dt(2026, 1, 1),
+        explicit_long_term=False,
+    )]
+    typed_input.is_fii_fpi = True
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    stcg = document["ITR"]["ITR3"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    assert stcg["NRISecur115AD"]["CapgainonAssets"] == 1000000
+    assert stcg["SaleOnOtherAssets"]["CapgainonAssets"] == 0
+    si_by_section = {e.section: e for e in result.schedules["si"].entries}
+    assert si_by_section["5ADii"].gross_income == Decimal("1000000")
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(document["ITR"]["ITR3"]["ScheduleCGFor23"]))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_115ad_no_disclosure_when_not_fii_fpi() -> None:
+    """No regression: item A5 stays the honest zero placeholder, and A6
+    carries the real (slab-rate) gain, when `is_fii_fpi=False`."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.UNLISTED_SHARES,
+        full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("1000000"),
+        date_of_acquisition=_dt(2025, 6, 1), date_of_transfer=_dt(2026, 1, 1),
+        explicit_long_term=False,
+    )]
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    stcg = document["ITR"]["ITR3"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    assert stcg["NRISecur115AD"]["CapgainonAssets"] == 0
+    assert stcg["SaleOnOtherAssets"]["CapgainonAssets"] == 1000000

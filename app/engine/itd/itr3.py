@@ -57,6 +57,7 @@ from app.engine.itd.itr2 import (
     _nri_foreign_asset as _itr2_nri_foreign_asset,
     _112a_source_rows as _itr2_112a_source_rows,
     _equity_share_112a as _equity_share_112a_zero,
+    _other_assets_block as _itr2_other_assets_block,
 )
 from app.engine.itd.cg_shared import (
     build_equity_mf_stt_rows,
@@ -64,6 +65,7 @@ from app.engine.itd.cg_shared import (
     build_itr3_other_assets_ltcg_block,
     build_stcg_buyback_loss_block,
     build_ltcg_buyback_loss_block,
+    _FII_SECURITIES_ASSET_TYPES,
 )
 
 _DR_RANGE = {
@@ -2449,29 +2451,32 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
     # Schedule CG item A5 ("NRISecur115AD") -- "For NON-RESIDENTS, from sale
     # of securities (other than those at A3 above) by an FII as per section
     # 115AD" (confirmed against the official ITR-3 form PDF, page 99, item
-    # 5) -- deliberately LEFT hardcoded zero below, unlike A3/B4/B7. ITR-2's
-    # own equivalent uses the identical, schema-confirmed byte-for-byte
-    # `EquityOrUnitSec94Type` shape (`_other_assets_block(...,
-    # asset_types=_FII_SECURITIES_ASSET_TYPES)`), which made porting the
-    # DISCLOSURE trivial -- but unlike A3 (111A, flat 20% either way) and
-    # B4/B7 (112A, flat 12.5%/threshold either way), this specific item is
-    # NOT rate-neutral: `compute_115ad_stcg_other()`'s own docstring
-    # confirms section 115AD(1)(ii) taxes these securities at a flat 30%
-    # for an FII/FPI, "[u]nlike an ordinary taxpayer's 'other' STCG
-    # (slab-rate, never Schedule SI)" -- and ITR-3's calculator
-    # (`calculators/itr3.py`) has ZERO `is_fii_fpi` references anywhere,
-    # always taxing this bucket at ordinary slab rate. Wiring up A5's
-    # disclosure alone (as a first attempt here did) would have shown real
-    # FII-securities figures implying 30% flat-rate tax while the
-    # calculator kept taxing them at slab rate -- a genuine, severe
-    # disclosure/tax divergence, not merely an incomplete feature.
-    # Replicating ITR-2's full FII-rate machinery (compute_115ad_stcg_
-    # other(), the matching CYLA/BFLA "stcg30" bucket routing, Schedule-SI
-    # dispatch) for ITR-3 is a materially larger undertaking than A3/B4/B7's
-    # pure disclosure fixes and is deliberately NOT attempted here --
-    # flagged as its own, separately-scoped item rather than shipped
-    # incomplete.
-    stcg_other = build_itr3_other_assets_stcg_block(typed_input.cg_transactions or [], deemed_stcg_depreciable)
+    # 5). Previously hardcoded zero: this item is NOT rate-neutral (unlike
+    # A3/B4/B7) -- section 115AD(1)(ii) taxes these securities at a flat
+    # 30% for an FII/FPI, unlike an ordinary taxpayer's identical bucket
+    # (slab-rate) -- so wiring up the disclosure alone, without also
+    # giving the calculator the matching flat-30% Schedule-SI dispatch,
+    # would have created a real disclosure/tax divergence. Now safe:
+    # `calculators/itr3.py` gained the full `is_fii_fpi`-driven
+    # `compute_115ad_stcg_other()`/CYLA-BFLA-"stcg30" machinery (ported
+    # from ITR-2's own already-correct, live-UAT-tested version) before
+    # this disclosure fix landed. `_FII_SECURITIES_ASSET_TYPES` (unlisted
+    # shares/listed securities/debt MFs/specified MFs/market-linked
+    # debentures/bonds) is a SUBSET of A6's own generic "other assets"
+    # bucket -- when `is_fii_fpi`, those transactions must be EXCLUDED
+    # from A6 (`stcg_other` below) or they would be double-counted in both
+    # A5 and A6, matching ITR-2's own identical exclusion pattern.
+    fii_stcg_securities = None
+    stcg_txs_for_a6 = typed_input.cg_transactions or []
+    if is_fii_fpi:
+        fii_stcg_securities = _itr2_other_assets_block(
+            typed_input.cg_transactions or [], is_long_term=False, asset_types=_FII_SECURITIES_ASSET_TYPES,
+        )
+        stcg_txs_for_a6 = [
+            tx for tx in stcg_txs_for_a6
+            if (tx.asset_type.value if hasattr(tx.asset_type, "value") else tx.asset_type) not in _FII_SECURITIES_ASSET_TYPES
+        ]
+    stcg_other = build_itr3_other_assets_stcg_block(stcg_txs_for_a6, deemed_stcg_depreciable)
     # Schedule CG item B6 ("NRIOnSec112and115") -- LTCG on unlisted
     # securities u/s 112(1)(c), bonds/GDRs u/s 115AC, or FII securities
     # u/s 115AD. Confirmed present in ITR-3's own official JSON schema
@@ -2558,7 +2563,7 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         "SaleofLandBuild": {"SaleofLandBuildDtls": stcg_rows},
         "EquityMFonSTT": equity_111a_rows,
         "NRITransacSec48Dtl": {"NRItaxSTTPaid": _to_rupees(typed_input.cg_nri_stcg_stt_paid), "NRItaxSTTNotPaid": _to_rupees(typed_input.cg_nri_stcg_stt_not_paid)},
-        "NRISecur115AD": {"FullValueConsdRecvUnqshr": 0, "FairMrktValueUnqshr": 0, "FullValueConsdSec50CA": 0, "FullValueConsdOthUnqshr": 0, "FullConsideration": 0, "DeductSec48": {"AquisitCost": 0, "ImproveCost": 0, "ExpOnTrans": 0, "TotalDedn": 0}, "BalanceCG": 0, "LossSec94of7Or94of8": 0, "CapgainonAssets": 0},
+        "NRISecur115AD": fii_stcg_securities if fii_stcg_securities is not None else {"FullValueConsdRecvUnqshr": 0, "FairMrktValueUnqshr": 0, "FullValueConsdSec50CA": 0, "FullValueConsdOthUnqshr": 0, "FullConsideration": 0, "DeductSec48": {"AquisitCost": 0, "ImproveCost": 0, "ExpOnTrans": 0, "TotalDedn": 0}, "BalanceCG": 0, "LossSec94of7Or94of8": 0, "CapgainonAssets": 0},
         "SaleOnOtherAssets": stcg_other,
         "UnutilizedStcgFlag": stcg_unutilized["Flag"],
         **({"UnutilizedCg": stcg_unutilized["UnutilizedCg"]} if stcg_unutilized["UnutilizedCg"] else {}),

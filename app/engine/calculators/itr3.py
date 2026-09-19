@@ -58,6 +58,7 @@ from app.engine.schedules.special_rates import (
     compute_112a_taxable as si_112a_taxable, compute_111a as si_111a,
     compute_112 as si_112, compute_dtaa_stcg, compute_dtaa_ltcg,
     compute_vda as si_vda, compute_lottery, compute_115bbe, compute_115bbf,
+    compute_115ad_stcg_other,
     aggregate as aggregate_si,
 )
 from app.engine.schedules.agricultural import (
@@ -165,6 +166,14 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # "resident" under section 6 (only a non-resident is excluded), same
     # gate ITR-2's own calculator uses (calculators/itr2.py).
     is_resident_or_nor = input_data.residential_status != ResidentialStatus.NON_RESIDENT
+    # Section 115AD(1)(ii): an FII/FPI's own "other" STCG (securities, STT
+    # not paid) is a flat 30% special rate via Schedule SI, unlike an
+    # ordinary taxpayer's identical basket, which is slab-rate -- matching
+    # ITR-2's own already-correct, live-UAT-tested dispatch exactly
+    # (calculators/itr2.py). `typed_input.is_fii_fpi`/`input_data.is_fii_fpi`
+    # is a real, user-settable ITR3Input field (confirmed while fixing
+    # tracker #21-22's Schedule 112A/115AD and B4/B7 items).
+    is_fii_fpi = bool(input_data.is_fii_fpi)
 
     # ── 1. Business Income (PGBP) ───────────────────────────────────────
     biz_income = z
@@ -466,13 +475,13 @@ def compute(input_data: ITR3Input) -> ITR3Result:
 
     # Section 46A capital loss on buyback of shares (Schedule CG's
     # "CapitalLossBuyBackShares" block) is a genuine loss, not merely
-    # disclosure -- it reduces the actual taxed STCG/LTCG total. Unlike
-    # ITR-2, ITR-3 has no FII/FPI assessee concept and therefore no genuine
-    # flat-30% STCG basket at all (section 115AD(1)(ii) is FII-only) -- both
-    # `cg_buyback_loss_stcg30` and `cg_buyback_loss_stcg_applicable`
-    # correctly net into the SAME `stcg_other` accumulator, which CYLA/BFLA
-    # below route into the single "applicable rate" STCG sub-basket
-    # (`stcg_app_income`), matching ITR-2's own non-FII path exactly.
+    # disclosure -- it reduces the actual taxed STCG/LTCG total.
+    # `cg_buyback_loss_stcg30`/`cg_buyback_loss_stcg_applicable` both net
+    # into the SAME `stcg_other` accumulator here, which CYLA/BFLA below
+    # route AS ONE unit into either the flat-30% or "applicable rate"
+    # sub-basket depending on `is_fii_fpi` -- matching ITR-2's own
+    # identical (and identically imprecise for the rare case of BOTH
+    # fields populated with disagreeing intent) architecture exactly.
     stcg_111a_val += input_data.cg_buyback_loss_stcg20
     stcg_other += input_data.cg_buyback_loss_stcg30 + input_data.cg_buyback_loss_stcg_applicable
     ltcg_other_cg += input_data.cg_buyback_loss_ltcg
@@ -716,23 +725,36 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # Map CG baskets into the statutory sub-baskets CYLA/BFLA/Schedule SI
     # need, mirroring ITR-2's own already-correct calculator exactly
     # (calculators/itr2.py) -- ITR-3 shares the identical Schedule CG/CYLA/
-    # BFLA/SI architecture, just without a distinct FII/FPI assessee status
-    # (FII is out of scope for ITR-3 filers entirely), so there is no
-    # genuine flat-30% STCG basket here: `stcg_result.income_30per`
-    # (land/building) and `income_app_rate` both always land in the
-    # "applicable rate" (slab) STCG sub-basket. Previously EVERY CG rate
-    # bucket -- 111A @20%, ordinary LTCG @12.5% under section 112, DTAA-rate
-    # CG -- was lumped into a single generic bucket with no differentiation
-    # at all, which meant: (1) section 112 LTCG-other was never taxed at
-    # its own 12.5% special rate, only at slab rates; (2) the section
-    # 112(1)(a) second-proviso relief could never apply (is_resident was
-    # never even passed to compute_ltcg()); (3) a current-year/brought-
-    # forward loss set off against the lumped bucket never correctly
-    # reduced the special-rate 111A/112A tax, since Schedule SI entries
-    # were built from RAW pre-loss values further down this function
-    # (fixed below, ## 16).
+    # BFLA/SI architecture. Previously EVERY CG rate bucket -- 111A @20%,
+    # ordinary LTCG @12.5% under section 112, DTAA-rate CG -- was lumped
+    # into a single generic bucket with no differentiation at all, which
+    # meant: (1) section 112 LTCG-other was never taxed at its own 12.5%
+    # special rate, only at slab rates; (2) the section 112(1)(a)
+    # second-proviso relief could never apply (is_resident was never even
+    # passed to compute_ltcg()); (3) a current-year/brought-forward loss
+    # set off against the lumped bucket never correctly reduced the
+    # special-rate 111A/112A tax, since Schedule SI entries were built from
+    # RAW pre-loss values further down this function (fixed below, ## 16).
+    #
+    # `income_30per` (land/building) + `income_app_rate` (generic other
+    # assets) form the SAME "other STCG" bucket ITR-2 splits on
+    # `is_fii_fpi` -- for an ordinary (non-FII/FPI) taxpayer this is
+    # genuinely slab-rate ("applicable rate"); for an FII/FPI it is the
+    # section 115AD(1)(ii) flat-30% basket instead (`stcg30`), matching
+    # ITR-2's own already-correct, live-UAT-tested split exactly. A real
+    # FII/FPI assessee never has land/building/generic-jewellery STCG
+    # blended into the same basket in practice (see this file's own
+    # `equity_111a_rows` precedent for the identical reasoning), so this
+    # is a safe, unconditional swap on `is_fii_fpi` alone, not a
+    # per-transaction asset-type split.
     stcg_111a_signed = stcg_result.income_111a
-    stcg_app_signed = stcg_result.income_30per + stcg_result.income_app_rate
+    stcg_other_and_land = stcg_result.income_30per + stcg_result.income_app_rate
+    if is_fii_fpi:
+        stcg_30_signed = stcg_other_and_land
+        stcg_app_signed = z
+    else:
+        stcg_30_signed = z
+        stcg_app_signed = stcg_other_and_land
     stcg_dtaa_signed = stcg_result.income_dtaa
     ltcg_125_signed = ltcg_result.income_125per_other
     ltcg_112a_gross = ltcg_result.income_112a
@@ -746,7 +768,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         spec_biz_loss=pgbp.speculative_signed if has_pgbp and pgbp.speculative_signed < 0 else z,
         spec_biz_income=spec_biz_income_for_cyla,
         stcg20_income=stcg_111a_signed,
-        stcg30_income=z,
+        stcg30_income=stcg_30_signed,
         stcg_app_income=stcg_app_signed,
         stcg_dtaa_income=stcg_dtaa_signed,
         ltcg125_income=ltcg_125_signed + ltcg_112a_gross,
@@ -934,6 +956,23 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         for dtaa in input_data.cg_ltcg_dtaa_entries:
             if dtaa.chargeable_in_india:
                 si_entries.append(compute_dtaa_ltcg(dtaa.amount * ltcg_dtaa_ratio, dtaa.applicable_rate))
+
+    # Section 115AD(1)(ii): an FII/FPI's OWN "other" STCG on securities
+    # (STT not paid, i.e. not 111A-equivalent) is a flat 30% special rate,
+    # unlike an ordinary taxpayer's identical basket, which is slab-rate.
+    # This basket is EXCLUDED from the ordinary slab-tax base automatically
+    # once it has a real Schedule-SI entry (the same "no SI entry -> slab
+    # rate" mechanism this calculator's own PTI dispatch already relies
+    # on). Ported verbatim from ITR-2's own already-correct, live-UAT-
+    # tested dispatch (calculators/itr2.py) -- `post_loss_cg["normal_stcg"]`
+    # mixes securities and non-securities asset types when both are present
+    # in the same return (Schedule CG disclosure's own item A5/A6 split is
+    # finer-grained than this basket), so the tax AMOUNT is correct
+    # regardless, but the SecCode attribution is only approximate in that
+    # mixed case -- same documented limitation as ITR-2's own identical
+    # comment.
+    if is_fii_fpi and post_loss_cg["normal_stcg"] > 0:
+        si_entries.append(compute_115ad_stcg_other(post_loss_cg["normal_stcg"]))
 
     if vda_income > 0:
         si_entries.append(si_vda(vda_income))
