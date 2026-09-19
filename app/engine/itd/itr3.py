@@ -2837,7 +2837,7 @@ def _partb_ti(result: ITR3Result) -> dict:
         max(z, pgbp.non_spec_net_income) + vda_income_bi if pgbp is not None else business_total
     )
     speculative = max(z, getattr(pgbp, "speculative_net_income", z))
-    specified = max(z, getattr(pgbp, "specified_business_net_income", z))
+    specified = max(z, getattr(pgbp, "specified_net_income", z))
     stcg_20 = max(z, getattr(stcg, "income_20per", z))
     stcg_30 = max(z, getattr(stcg, "income_30per", z))
     stcg_app = max(z, getattr(stcg, "income_app_rate", z))

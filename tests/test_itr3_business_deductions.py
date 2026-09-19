@@ -9,7 +9,7 @@ from jsonschema import Draft4Validator
 from app.engine.itd.itr3_schema import get_itr3_schema_validator
 from app.engine.calculators.itr3 import ITR3Result
 from app.engine.schedules.business import PGBPResult
-from app.engine.itd.itr3 import _schedule_bp, _serialize_schedule_model
+from app.engine.itd.itr3 import _schedule_bp, _serialize_schedule_model, _partb_ti
 from app.schemas.itr3 import BusinessIncome
 
 
@@ -673,3 +673,19 @@ def test_schedule_80ra_and_10aa_validate() -> None:
     ))
     assert not list(_definition_validator("Schedule80RA").iter_errors(_serialize_schedule_model(ra)))
     assert not list(_definition_validator("Schedule10AA").iter_errors(_serialize_schedule_model(aa)))
+
+
+def test_partb_ti_prof_gain_specified_bus_reflects_real_section_35ad_income() -> None:
+    """CORRECTION (2026-09-19): `_partb_ti()` read a non-existent PGBPResult
+    attribute (`specified_business_net_income`) instead of the real field
+    (`specified_net_income`) -- the `getattr` fallback silently discarded
+    any real section 35AD specified-business income, always disclosing
+    `ProfGainSpecifiedBus`/its contribution to `TotProfBusGain` as zero.
+    Found incidentally while re-verifying Schedule VDA's Part B-TI wiring,
+    unrelated to VDA/115BBH itself."""
+    pgbp = compute_pgbp(net_profit_before_tax=Decimal("0"), specified_net_pl=Decimal("250000"))
+    assert pgbp.specified_net_income == Decimal("250000")
+    result = ITR3Result(schedules={"pgbp": pgbp}, business_income=Decimal("250000"))
+    payload = _partb_ti(result)
+    assert payload["ProfBusGain"]["ProfGainSpecifiedBus"] == 250000
+    assert payload["ProfBusGain"]["TotProfBusGain"] == 250000
