@@ -849,3 +849,70 @@ def test_115ad_no_disclosure_when_not_fii_fpi() -> None:
     stcg = document["ITR"]["ITR3"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
     assert stcg["NRISecur115AD"]["CapgainonAssets"] == 0
     assert stcg["SaleOnOtherAssets"]["CapgainonAssets"] == 1000000
+
+
+# ---------------------------------------------------------------------------
+# CORRECTION (2026-09-19): item 5's own scope was itself initially wrong.
+# "Securities" under section 115AD(1)(ii) is a defined, narrow statutory
+# term (shares/debentures/units/bonds) -- NOT land/building or the other
+# generic-other-asset types. The first version of the item-5 machinery
+# above (correctly) taxed genuine FII securities at flat 30%, but a
+# `post_loss_cg_baskets()` bug meant ANY FII/FPI "other" STCG -- including
+# land/building, which has no section-115AD flat-rate treatment at all --
+# was swept into the same flat-30% bucket. These two tests certify the
+# fix: land-only stays slab-rate, and a mixed land+securities return
+# splits correctly (only the securities portion gets 5ADii).
+# ---------------------------------------------------------------------------
+
+def test_115ad_fii_land_only_stcg_stays_slab_not_flat_30() -> None:
+    """An FII/FPI's STCG on land/building has no section 115AD flat-rate
+    treatment -- `CGAssetType.LAND_BUILDING` is not a member of
+    `_FII_SECURITIES_ASSET_TYPES`, so it must fall through to ordinary
+    slab rate exactly like a non-FII taxpayer's identical gain, with no
+    5ADii Schedule SI entry at all."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING,
+        full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("1000000"),
+        date_of_acquisition=_dt(2025, 6, 1), date_of_transfer=_dt(2026, 1, 1),
+        explicit_long_term=False,
+    )]
+    typed_input.is_fii_fpi = True
+    result = compute_itr3(typed_input)
+    assert "5ADii" not in {e.section for e in result.schedules["si"].entries}
+    assert result.special_rate_tax == Decimal("0")
+    assert result.slab_tax > Decimal("0")
+
+
+def test_115ad_fii_mixed_land_and_securities_splits_correctly() -> None:
+    """A single FII/FPI return with BOTH a land/building STCG (slab-rate)
+    AND a securities STCG (flat-30% u/s 115AD(1)(ii)) must tax only the
+    securities portion at 30% via Schedule SI -- the land portion must
+    still contribute to ordinary slab tax, not be swept into the flat-30%
+    bucket alongside it."""
+    from datetime import date as _dt
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [
+        CGTransaction(
+            asset_type=CGAssetType.LAND_BUILDING,
+            full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("1000000"),
+            date_of_acquisition=_dt(2025, 6, 1), date_of_transfer=_dt(2026, 1, 1),
+            explicit_long_term=False,
+        ),
+        CGTransaction(
+            asset_type=CGAssetType.UNLISTED_SHARES,
+            full_consideration=Decimal("700000"), cost_of_acquisition=Decimal("500000"),
+            date_of_acquisition=_dt(2025, 6, 1), date_of_transfer=_dt(2026, 1, 1),
+            explicit_long_term=False,
+        ),
+    ]
+    typed_input.is_fii_fpi = True
+    result = compute_itr3(typed_input)
+    si_by_section = {e.section: e for e in result.schedules["si"].entries}
+    assert si_by_section["5ADii"].gross_income == Decimal("200000")
+    assert si_by_section["5ADii"].tax_amount == Decimal("60000")
+    assert result.special_rate_tax == Decimal("60000")
+    assert result.slab_tax > Decimal("0")

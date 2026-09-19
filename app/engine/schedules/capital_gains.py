@@ -15,6 +15,48 @@ from app.engine.schedules.loss_setoff.bfla import BFLAResult
 from app.engine.schedules.loss_setoff.cyla import CYLAResult
 
 _ZERO = Decimal("0")
+
+# Schedule CG's generic "other assets" bucket (Sl. A6/B9 ITR-3; Sl. A5/B8
+# ITR-2). Lives here (not `itd/cg_shared.py`, the disclosure-only layer)
+# because BOTH the calculator (this fix: separating the section 115AD(1)(ii)
+# flat-30% FII-securities sub-bucket from land/building + genuinely
+# non-securities assets at classification time) and the disclosure builders
+# need it -- `itd/cg_shared.py` re-imports these two names from here so its
+# own existing internal references, and ITR-2/ITR-3's own established
+# imports, all keep working unchanged.
+_GENERIC_OTHER_ASSET_TYPES = frozenset({
+    "unlisted_shares",
+    "listed_security",
+    "debt_mutual_fund",
+    "specified_mutual_fund_50aa",
+    "market_linked_debenture_50aa",
+    "bonds_debentures",
+    "depreciable_asset",
+    "jewellery",
+    "foreign_asset",
+    "other",
+})
+
+# The subset of the generic "other assets" bucket that are genuinely
+# "securities" for section 115AD purposes. An FII/FPI's STCG on these is a
+# flat 30% special rate (section 115AD(1)(ii)); land/building and the
+# remaining non-securities assets (jewellery/depreciable_asset/
+# foreign_asset/other) are NEVER covered by that section regardless of
+# FII/FPI status and must stay at the ordinary "applicable rate" (slab)
+# basket -- confirmed both by the statute's own text ("securities" is a
+# defined term excluding immovable property) and by direct computation: an
+# FII/FPI-flagged return with ONLY a land/building STCG gain and no
+# securities at all was found taxing that gain at a flat 30% before this
+# fix, which no reading of section 115AD supports.
+_FII_SECURITIES_ASSET_TYPES = frozenset({
+    "unlisted_shares",
+    "listed_security",
+    "debt_mutual_fund",
+    "specified_mutual_fund_50aa",
+    "market_linked_debenture_50aa",
+    "bonds_debentures",
+})
+
 _GRANDFATHERING_CUTOFF = date(2018, 2, 1)
 # Finance Act 2024's indexation-removal cutoff. The second proviso to
 # section 112(1)(a) protects a resident individual/HUF who acquired
@@ -150,6 +192,16 @@ class STCGResult:
     income_30per: Decimal = _ZERO
     income_app_rate: Decimal = _ZERO
     income_dtaa: Decimal = _ZERO
+    # Section 115AD(1)(ii): the genuinely "securities" (per
+    # `_FII_SECURITIES_ASSET_TYPES`) subset of `income_30per`'s own
+    # "other assets" component -- split out so an FII/FPI's flat-30%
+    # basket can be routed correctly without also sweeping in land/
+    # building or non-securities other assets (jewellery, etc.), which
+    # section 115AD does not cover regardless of FII/FPI status. Already
+    # INCLUDED in `income_30per`/`total_stcg` (additive disclosure, not a
+    # separate pool) -- the caller subtracts it back out when routing to
+    # the flat-30% basket, exactly like `income_dtaa` is already handled.
+    income_fii_securities: Decimal = _ZERO
     total_stcg: Decimal = _ZERO
     # Per-transaction land/building detail, preserved for Schedule CG's
     # SaleofLandBuildDtls rows -- previously discarded after computing
@@ -367,6 +419,7 @@ def compute_stcg(
     stcg_other: Decimal = _ZERO,
     is_post_jul24: bool = True,
     stcg_dtaa: Decimal = _ZERO,
+    stcg_fii_securities: Decimal = _ZERO,
 ) -> STCGResult:
     """Compute signed short-term capital-gain baskets.
 
@@ -379,6 +432,13 @@ def compute_stcg(
             mirrors ``compute_ltcg()``'s own already-shipped ``ltcg_dtaa``
             parameter; defaults to zero so every existing caller (ITR-1/3/4)
             is unaffected.
+        stcg_fii_securities: The genuinely "securities" subset of
+            `stcg_other`, ALREADY included in it (not additive) -- callers
+            pass this so `STCGResult.income_fii_securities` can be read
+            back out separately for section 115AD(1)(ii) routing, without
+            this function needing to know about FII/FPI status itself.
+            Defaults to zero so every existing caller (ITR-1/3/4) is
+            unaffected.
 
     Returns:
         Signed STCG baskets.
@@ -410,6 +470,7 @@ def compute_stcg(
         income_111a=section_111a,
         income_30per=other,
         income_dtaa=dtaa,
+        income_fii_securities=_decimal(stcg_fii_securities),
         total_stcg=section_111a + other + dtaa,
         land_building=list(stcg_land_building or []),
     )
@@ -690,14 +751,26 @@ def post_loss_cg_baskets(
     themselves) and has been dropped in this shared version.
     """
     # Map CYLA/BFLA 6-sub-basket residuals into the 4 post-loss baskets
-    # used by the SI engine. `normal_stcg` is the "ordinary slab-rate STCG"
-    # basket (land/building + generic other-assets, form items A1/A5) --
-    # sourced from `stcg30_remaining` for an FII/FPI (whose OWN section
-    # 115AD(1)(ii) securities gain genuinely IS a flat 30%) or from
-    # `stcg_app_remaining` for every other taxpayer -- exactly one of the
-    # two is ever nonzero for a single return, so summing both is safe and
-    # keeps this basket's own total unchanged regardless of which CYLA
-    # sub-bucket it came from.
+    # used by the SI engine. `normal_stcg` is the COMBINED "ordinary
+    # slab-rate STCG" basket total (land/building + generic other-assets,
+    # form items A1/A5, PLUS any genuine FII/FPI section 115AD(1)(ii)
+    # securities gain, form item A4) -- used for `capital_gains_income`'s
+    # own aggregate total, where the two sub-baskets legitimately belong
+    # together regardless of rate.
+    #
+    # CORRECTION (2026-09-19): an earlier version of this comment claimed
+    # "exactly one of [stcg30_remaining, stcg_app_remaining] is ever
+    # nonzero for a single return, so summing both is safe" -- that
+    # assumption is WRONG once a single FII/FPI return can mix genuine
+    # securities (flat 30%, section 115AD(1)(ii)) with land/building or
+    # non-securities other assets (which that section does not cover
+    # regardless of FII/FPI status, confirmed by direct computation: an
+    # FII/FPI return with ONLY land/building STCG was previously taxed at
+    # a flat 30% before this fix). `normal_stcg_fii_securities` (below) is
+    # kept SEPARATE from the combined total specifically so the Schedule-SI
+    # flat-30% dispatch can use the narrower figure -- see its own
+    # definition below for why section 54B's exemption consumption must
+    # also target only the non-securities sub-basket.
     #
     # All six sub-baskets read the POST-BFLA (not CYLA-level) residual --
     # BFLA runs after CYLA and is the true final remaining income once
@@ -712,6 +785,7 @@ def post_loss_cg_baskets(
     # bucket's own Schedule SI special-rate tax -- the disclosed loss
     # set-off and the actual tax charged diverged. Found via
     # `tests/test_schedule_cg_comprehensive.py` (2026-09-18).
+    stcg_fii_securities_remaining = bfla.stcg30_remaining
     normal_stcg = bfla.stcg30_remaining + bfla.stcg_app_remaining
     section_111a = bfla.stcg20_remaining  # 20% 111A STCG
     # 112A gross and 112 other LTCG are both in the ltcg125 pool;
@@ -739,14 +813,17 @@ def post_loss_cg_baskets(
     # Section 54B (agricultural land) is the ONLY §54-series exemption the
     # official form allows against short-term capital gain (Schedule CG
     # item A1d restricts the STCG-land-building deduction to 54B only) --
-    # consume it from the 30%/normal-rate STCG bucket first, which is where
-    # land/building STCG lands (`compute_stcg()` blends land gain into
-    # `income_30per`). Only the REMAINING exemption pool -- after whatever
-    # 54B actually reduced STCG -- can then reduce LTCG.
+    # consume it from the non-securities (land/building + generic
+    # other-assets) sub-basket ONLY, never the genuine FII/FPI flat-30%
+    # securities sub-basket -- a land-only exemption cannot reduce a
+    # securities disposal's gain. Only the REMAINING exemption pool --
+    # after whatever 54B actually reduced STCG -- can then reduce LTCG.
     stcg_land_54b = sum((asset.exemption_total for asset in stcg.land_building), _ZERO)
     stcg_exemption_pool = min(max(_ZERO, stcg_land_54b), max(_ZERO, exemptions.total_exemption))
-    remaining_after_stcg, stcg_pools = _consume(stcg_exemption_pool, [normal_stcg])
-    normal_stcg = stcg_pools[0]
+    stcg_nonsecurities_before_exemption = normal_stcg - stcg_fii_securities_remaining
+    remaining_after_stcg, stcg_pools = _consume(stcg_exemption_pool, [stcg_nonsecurities_before_exemption])
+    stcg_nonsecurities_after_exemption = stcg_pools[0]
+    normal_stcg = stcg_nonsecurities_after_exemption + stcg_fii_securities_remaining
     stcg_exemption_used = stcg_exemption_pool - remaining_after_stcg
 
     # Section 54/54EC/54F/115F (LTCG-only) plus any 54B not already
@@ -757,6 +834,13 @@ def post_loss_cg_baskets(
     ltcg_exemption_used = ltcg_exemption_pool - ltcg_exemption_remaining
     return {
         "normal_stcg": normal_stcg,
+        # Section 115AD(1)(ii): the genuine FII/FPI flat-30% securities
+        # subset of `normal_stcg` (unaffected by 54B, which cannot apply to
+        # a securities disposal) -- callers use THIS narrower figure for
+        # the flat-30% Schedule-SI dispatch, not the combined `normal_stcg`
+        # (which would incorrectly also sweep in land/building/non-
+        # securities other-assets gains that section does not cover).
+        "normal_stcg_fii_securities": stcg_fii_securities_remaining,
         "111a": section_111a,
         "112": other_ltcg,
         "112a_gross": section_112a,
@@ -1159,7 +1243,17 @@ def _classify(transactions) -> tuple:
 
     Returns:
         (ltcg_112a_assets, stcg_land, ltcg_land, stcg_111a_signed,
-         stcg_other_signed, ltcg_other_signed)
+         stcg_other_signed, ltcg_other_signed, stcg_fii_securities_signed,
+         ltcg_fii_securities_signed)
+
+    `stcg_fii_securities_signed`/`ltcg_fii_securities_signed` are the
+    genuinely "securities" (`_FII_SECURITIES_ASSET_TYPES`) subset of
+    `stcg_other_signed`/`ltcg_other_signed` -- ALREADY INCLUDED in those
+    totals (additive disclosure, not a separate pool), returned separately
+    so a caller can route section 115AD(1)(ii)'s flat-30% FII/FPI rate to
+    exactly the "securities" gain, without also sweeping in land/building
+    or non-securities other assets (jewellery, etc.), which that section
+    does not cover regardless of FII/FPI status.
     """
     ltcg_112a_assets: list[CG112AAsset] = []
     stcg_land: list[CGAsset] = []
@@ -1167,6 +1261,8 @@ def _classify(transactions) -> tuple:
     stcg_111a_signed = _ZERO
     stcg_other_signed = _ZERO
     ltcg_other_signed = _ZERO
+    stcg_fii_securities_signed = _ZERO
+    ltcg_fii_securities_signed = _ZERO
 
     for tx in transactions or []:
         asset_type = _asset_type_value(tx)
@@ -1241,11 +1337,16 @@ def _classify(transactions) -> tuple:
             # equivalent formula (other_asset_gain()) but missing here --
             # entered as a positive value that must be ADDED to reverse a
             # loss the taxpayer already booked but the Act disallows.
+            is_security = asset_type in _FII_SECURITIES_ASSET_TYPES
             if is_short:
                 gain += _decimal_attr(tx, "loss_disallowed_94_7_94_8")
                 stcg_other_signed += gain
+                if is_security:
+                    stcg_fii_securities_signed += gain
             else:
                 ltcg_other_signed += gain
+                if is_security:
+                    ltcg_fii_securities_signed += gain
 
     # Item 8 (cross-form issues log): section 50CA's "higher of
     # consideration or FMV" deemed value for unquoted-share disposals was
@@ -1253,13 +1354,20 @@ def _classify(transactions) -> tuple:
     # actual taxed gain. Added once, in aggregate, matching the disclosure
     # builder's own aggregation exactly -- see unquoted_shares_50ca_
     # adjustment()'s own docstring for why per-transaction application
-    # would overstate the deemed consideration.
-    stcg_other_signed += unquoted_shares_50ca_adjustment(transactions, is_short=True)
-    ltcg_other_signed += unquoted_shares_50ca_adjustment(transactions, is_short=False)
+    # would overstate the deemed consideration. "unlisted_shares" is
+    # itself a member of `_FII_SECURITIES_ASSET_TYPES`, so this entire
+    # delta belongs in the securities sub-total too.
+    stcg_50ca_delta = unquoted_shares_50ca_adjustment(transactions, is_short=True)
+    ltcg_50ca_delta = unquoted_shares_50ca_adjustment(transactions, is_short=False)
+    stcg_other_signed += stcg_50ca_delta
+    ltcg_other_signed += ltcg_50ca_delta
+    stcg_fii_securities_signed += stcg_50ca_delta
+    ltcg_fii_securities_signed += ltcg_50ca_delta
 
     return (
         ltcg_112a_assets, stcg_land, ltcg_land,
         stcg_111a_signed, stcg_other_signed, ltcg_other_signed,
+        stcg_fii_securities_signed, ltcg_fii_securities_signed,
     )
 
 
@@ -1302,12 +1410,14 @@ def compute(transactions, is_resident: bool = False) -> CGResult:
     (
         ltcg_112a_assets, stcg_land, ltcg_land,
         stcg_111a_signed, stcg_other_signed, ltcg_other_signed,
+        stcg_fii_securities_signed, _ltcg_fii_securities_signed,
     ) = _classify(transactions)
 
     stcg_result = compute_stcg(
         stcg_111a=stcg_111a_signed,
         stcg_land_building=stcg_land,
         stcg_other=stcg_other_signed,
+        stcg_fii_securities=stcg_fii_securities_signed,
     )
     ltcg_result = compute_ltcg(
         ltcg_112a_assets=ltcg_112a_assets,

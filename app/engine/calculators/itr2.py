@@ -278,97 +278,6 @@ def _is_short_term(asset_type: str, acquired: date, transferred: date) -> bool:
     return transferred < _calendar_anniversary(acquired, years)
 
 
-def _classify_cg_transactions(
-    input_data: ITR2Input,
-) -> tuple[list[CG112AAsset], list[CGAsset], list[CGAsset], Decimal, Decimal, Decimal]:
-    """Classify ITR-2 CG transactions into 112A, land/building, 111A, and other baskets.
-
-    Returns:
-        (112A_assets, stcg_land, ltcg_land, stcg_111a_signed,
-         stcg_other_signed, ltcg_other_signed)
-    """
-    ltcg_112a_assets: list[CG112AAsset] = []
-    stcg_land: list[CGAsset] = []
-    ltcg_land: list[CGAsset] = []
-    stcg_111a_signed = _ZERO
-    stcg_other_signed = _ZERO
-    ltcg_other_signed = _ZERO
-
-    for tx in input_data.cg_transactions:
-        asset_type = tx.asset_type.value
-
-        # Determine holding period by calendar anniversary, never day-count approximations.
-        is_short = True
-        if tx.date_of_acquisition is not None:
-            is_short = _is_short_term(asset_type, tx.date_of_acquisition, tx.date_of_transfer)
-        elif tx.explicit_long_term is not None:
-            is_short = not tx.explicit_long_term
-
-        if asset_type in ("listed_equity_112a", "equity_oriented_fund_112a", "business_trust_unit_112a"):
-            ltcg_112a_assets.append(CG112AAsset(
-                isin_code=tx.isin_code or "INNOTREQUIRD",
-                share_name=tx.description or "",
-                total_sale_value=tx.full_consideration,
-                cost_acq_without_index=tx.cost_of_acquisition,
-                total_fmv=tx.fair_market_value_jan2018 or _ZERO,
-                date_of_acquisition=tx.date_of_acquisition.isoformat() if tx.date_of_acquisition else "",
-                date_of_transfer=tx.date_of_transfer.isoformat(),
-                grandfathering_eligible=tx.date_of_acquisition is not None and tx.date_of_acquisition < date(2018, 2, 1),
-            ))
-        elif asset_type == "listed_equity_111a" or asset_type == "equity_oriented_fund_111a":
-            # Form A3c = 3a - 3biv (biv = cost + improvement + transfer
-            # expenses); A3e = 3c + 3d (3d = 94(7)/94(8) disallowed loss,
-            # entered positive and added back) -- kept identical to the
-            # ITR-3 calculator's own A3 formula (calculators/itr3.py) since
-            # both forms share this schedule's statutory computation.
-            gain = (tx.full_consideration - tx.cost_of_acquisition
-                    - tx.improvement_cost - tx.expenditure_on_transfer
-                    + tx.loss_disallowed_94_7_94_8)
-            if is_short:
-                stcg_111a_signed += gain
-            else:
-                ltcg_112a_assets.append(CG112AAsset(
-                    isin_code=tx.isin_code or "INNOTREQUIRD",
-                    share_name=tx.description or "",
-                    total_sale_value=tx.full_consideration,
-                    cost_acq_without_index=tx.cost_of_acquisition,
-                    total_fmv=tx.fair_market_value_jan2018 or _ZERO,
-                    date_of_acquisition=tx.date_of_acquisition.isoformat() if tx.date_of_acquisition else "",
-                    date_of_transfer=tx.date_of_transfer.isoformat(),
-                    grandfathering_eligible=tx.date_of_acquisition is not None and tx.date_of_acquisition < date(2018, 2, 1),
-                ))
-        elif asset_type == "land_building":
-            asset = CGAsset(
-                description=tx.description or "",
-                date_of_acquisition=tx.date_of_acquisition.isoformat() if tx.date_of_acquisition else "",
-                date_of_transfer=tx.date_of_transfer.isoformat(),
-                full_consideration=tx.full_consideration,
-                stamp_duty_value=tx.stamp_duty_value or Decimal("0"),
-                acquisition_cost=tx.cost_of_acquisition,
-                indexed_acquisition_cost=tx.indexed_cost,
-                improvement_cost=tx.improvement_cost,
-                indexed_improvement_cost=tx.indexed_improvement,
-                year_of_improvement=tx.year_of_improvement or "",
-                expenditure_on_transfer=tx.expenditure_on_transfer,
-            )
-            if is_short:
-                stcg_land.append(asset)
-            else:
-                ltcg_land.append(asset)
-        else:
-            valid_sections = (
-                ITR2_OTHER_ASSETS_ST_EXEMPTION_SECTIONS if is_short
-                else ITR2_OTHER_ASSETS_LT_EXEMPTION_SECTIONS
-            )
-            gain = other_asset_gain(tx, is_short, valid_sections)
-            if is_short:
-                stcg_other_signed += gain
-            else:
-                ltcg_other_signed += gain
-
-    return ltcg_112a_assets, stcg_land, ltcg_land, stcg_111a_signed, stcg_other_signed, ltcg_other_signed
-
-
 def compute(input_data: ITR2Input) -> ITR2Result:
     """Compute ITR-2 tax liability end-to-end.
 
@@ -660,6 +569,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         (
             ltcg_112a_assets, stcg_land, ltcg_land,
             stcg_111a_signed, stcg_other_signed, ltcg_other_signed,
+            stcg_fii_securities_signed, _ltcg_fii_securities_signed,
         ) = _cg_classify(input_data.cg_transactions)
         for scrip in explicit_112a_scrips:
             ltcg_112a_assets.append(_CG112AAsset(
@@ -681,6 +591,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
             stcg_111a=stcg_111a_signed,
             stcg_land_building=stcg_land,
             stcg_other=stcg_other_signed,
+            stcg_fii_securities=stcg_fii_securities_signed,
         )
         ltcg_result = _compute_ltcg_merged(
             ltcg_112a_assets=ltcg_112a_assets,
@@ -900,21 +811,31 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # equal to the sum of Sl. No. (A4e + A7b + A(A)_30%)". An ordinary
     # (non-FII/FPI) taxpayer's land/building+other-assets STCG must
     # instead go to "stcg_app" (InStcgAppRate, "STCG taxable at applicable
-    # rates" -- i.e. the taxpayer's own slab rate). An FII/FPI's OWN
-    # section 115AD(1)(ii) securities gain genuinely IS a flat 30% (see
-    # the `is_fii_fpi` dispatch to `compute_115ad_stcg_other()` later in
-    # this function, which reads `post_loss_cg["normal_stcg"]` -- i.e. THIS
-    # exact "stcg30" bucket) -- unchanged for that case, since a real
-    # FII/FPI assessee never has land/building/generic-jewellery STCG
-    # blended into the same basket in practice.
+    # rates" -- i.e. the taxpayer's own slab rate).
+    #
+    # CORRECTION (2026-09-19): an FII/FPI's OWN section 115AD(1)(ii)
+    # securities gain genuinely IS a flat 30%, but this earlier comment's
+    # own closing claim -- "unchanged for that case, since a real FII/FPI
+    # assessee never has land/building/generic-jewellery STCG blended into
+    # the same basket in practice" -- was an untested assumption, not a
+    # verified fact, and turned out to be WRONG: confirmed by direct
+    # computation that an FII/FPI-flagged return with ONLY a land/building
+    # STCG gain (no securities, no FII involvement in the underlying
+    # asset at all) was taxed at a flat 30% before this fix, which section
+    # 115AD -- a defined term covering only "securities" -- does not
+    # support. `stcg_result.income_fii_securities` (new field, `_classify()`/
+    # `compute_stcg()`) is the genuinely-securities SUBSET of `income_30per`
+    # (already included in it, not additive) -- only THIS amount may ever
+    # route to the flat-30% "stcg30" bucket; land/building and non-
+    # securities other assets stay in "stcg_app" regardless of `is_fii_fpi`.
     stcg_111a_signed = stcg_result.income_111a
-    stcg_other_and_land = stcg_result.income_30per + stcg_result.income_app_rate
+    stcg_fii_securities_only = stcg_result.income_fii_securities
     if is_fii_fpi:
-        stcg_30_signed = stcg_other_and_land
-        stcg_app_signed = _ZERO
+        stcg_30_signed = stcg_fii_securities_only
+        stcg_app_signed = stcg_result.income_30per - stcg_fii_securities_only
     else:
         stcg_30_signed = _ZERO
-        stcg_app_signed = stcg_other_and_land
+        stcg_app_signed = stcg_result.income_30per
     stcg_dtaa_signed = stcg_result.income_dtaa  # DTAA-rate STCG
     ltcg_125_signed = ltcg_result.income_125per_other  # section 112 at 12.5%
     ltcg_112a_gross = ltcg_result.income_112a  # 112A before threshold
@@ -1339,12 +1260,14 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # unlike an ordinary taxpayer's identical basket, which is slab-rate.
     # This basket is EXCLUDED from the ordinary slab-tax base below
     # (special_rate_income_for_slab) precisely because of this dispatch.
-    # Same blended-basket limitation as the LTCG comment above applies here
-    # (post_loss_cg["normal_stcg"] mixes securities and non-securities
-    # asset types) -- tax amount unaffected, SecCode attribution only
-    # approximate if both are present in the same return.
-    if is_fii_fpi and post_loss_cg["normal_stcg"] > 0:
-        si_entries.append(compute_115ad_stcg_other(post_loss_cg["normal_stcg"]))
+    # Uses `normal_stcg_fii_securities` (the genuinely-securities SUBSET,
+    # `post_loss_cg_baskets()`'s own dedicated key), NOT the combined
+    # `normal_stcg` -- confirmed by direct computation that a mixed
+    # FII/FPI return (land/building + securities STCG together) was
+    # otherwise taxing the ENTIRE combined bucket at 30%, including the
+    # land/building portion section 115AD does not cover.
+    if is_fii_fpi and post_loss_cg["normal_stcg_fii_securities"] > 0:
+        si_entries.append(compute_115ad_stcg_other(post_loss_cg["normal_stcg_fii_securities"]))
 
     # VDA at 30%
     if vda_income > 0:
@@ -1514,13 +1437,19 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # Full post-loss 111A/112/112A/VDA income is excluded from slab tax.
     # For 112A, the ₹1.25 lakh threshold is tax-free but remains special-rate
     # income and must not leak into the normal slab basket.
-    # An FII/FPI's "other" STCG on securities (post_loss_cg["normal_stcg"])
-    # is dispatched to Schedule SI above (section 115AD(1)(ii), always
-    # special-rate for FII/FPI, unlike every other taxpayer type where this
-    # same basket is slab-rate) -- its exclusion from the slab base already
+    # An FII/FPI's "other" STCG on genuine securities
+    # (post_loss_cg["normal_stcg_fii_securities"]) is dispatched to
+    # Schedule SI above (section 115AD(1)(ii), always special-rate for
+    # FII/FPI, unlike every other taxpayer type where this same narrower
+    # basket is slab-rate) -- its exclusion from the slab base already
     # comes through `si_result.surcharge_full_income` below (that new SI
     # entry's own `taxable_income`), the same mechanism already used for
-    # 115BB/115BBE/etc., so it must not be added a second time here.
+    # 115BB/115BBE/etc., so it must not be added a second time here. The
+    # REMAINING land/building/non-securities portion of `normal_stcg`
+    # never gets an SI entry at all (regardless of `is_fii_fpi`), so it
+    # correctly falls through to slab tax via the same "no SI entry ->
+    # slab rate" mechanism this codebase already relies on elsewhere (e.g.
+    # PTI capital gains).
     # Uses "112a_gross", NOT "112a_taxable": `ti` above still includes the
     # FULL gross 112A gain (Part B-TI's item 9/12 never subtract the
     # section 112A ₹1.25L threshold at all -- confirmed against the form

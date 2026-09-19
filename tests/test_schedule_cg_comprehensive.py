@@ -820,9 +820,16 @@ def _fii_filing_profile():
     )
 
 
-def test_fii_fpi_other_stcg_uses_flat_30_percent_bucket() -> None:
+def test_fii_fpi_securities_stcg_uses_flat_30_percent_bucket() -> None:
+    """Section 115AD(1)(ii)'s flat 30% rate applies only to FII/FPI STCG on
+    "securities" (a defined statutory term -- shares, debentures, units,
+    bonds), confirmed against the statute and the official form's own item
+    numbering (item A5 = FII securities, distinct from item A1 land/building
+    and item A6 generic other assets). `unlisted_shares` is a genuine member
+    of `_FII_SECURITIES_ASSET_TYPES`, so this scenario correctly lands in
+    the flat-30% bucket."""
     txn = _txn(
-        CGAssetType.OTHER, D("500000"), D("350000"),
+        CGAssetType.UNLISTED_SHARES, D("500000"), D("350000"),
         date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2026, 1, 15),
     )
     r = _compute(
@@ -832,6 +839,75 @@ def test_fii_fpi_other_stcg_uses_flat_30_percent_bucket() -> None:
     cyla = r.schedules["cyla"]
     assert cyla.stcg30_remaining == D("150000")
     assert cyla.stcg_app_remaining == D("0")
+
+
+def test_fii_fpi_non_securities_other_stcg_stays_slab_rate() -> None:
+    """CORRECTION (2026-09-19): a prior version of this test wrongly
+    asserted that ANY "other"-typed STCG for an FII/FPI gets the flat 30%
+    rate -- that was a real, confirmed bug in the calculator (fixed this
+    session), not correct statutory behaviour. `CGAssetType.OTHER` is NOT a
+    member of `_FII_SECURITIES_ASSET_TYPES` (only genuine securities are),
+    so an FII/FPI's land/building/jewellery/foreign-asset/generic-other
+    STCG must stay in the ordinary applicable-rate (slab) bucket, exactly
+    like a non-FII taxpayer's identical gain -- see
+    `test_non_fii_stcg_never_lands_in_flat_30_percent_bucket` below for the
+    non-FII counterpart this test now mirrors."""
+    txn = _txn(
+        CGAssetType.OTHER, D("500000"), D("350000"),
+        date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2026, 1, 15),
+    )
+    r = _compute(
+        "itr2", residential_status=ResidentialStatus.NON_RESIDENT,
+        filing_profile=_fii_filing_profile(), cg_transactions=[txn],
+    )
+    cyla = r.schedules["cyla"]
+    assert cyla.stcg30_remaining == D("0")
+    assert cyla.stcg_app_remaining == D("150000")
+
+
+def test_fii_fpi_land_only_stcg_stays_slab_not_flat_30() -> None:
+    """An FII/FPI's STCG on land/building has no section 115AD flat-rate
+    treatment -- `CGAssetType.LAND_BUILDING` is not a member of
+    `_FII_SECURITIES_ASSET_TYPES`, so it must fall through to ordinary
+    slab rate exactly like a non-FII taxpayer's identical gain."""
+    txn = _txn(
+        CGAssetType.LAND_BUILDING, D("2000000"), D("1000000"),
+        date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2026, 1, 15),
+    )
+    r = _compute(
+        "itr2", residential_status=ResidentialStatus.NON_RESIDENT,
+        filing_profile=_fii_filing_profile(), cg_transactions=[txn],
+    )
+    assert r.special_rate_tax == D("0")
+    assert r.slab_tax > D("0")
+
+
+def test_fii_fpi_mixed_land_and_securities_splits_correctly() -> None:
+    """A single FII/FPI return with BOTH a land/building STCG (slab-rate)
+    AND a securities STCG (flat-30% u/s 115AD(1)(ii)) must tax only the
+    securities portion at 30% -- the land portion must still contribute to
+    ordinary slab tax, not be swept into the flat-30% bucket alongside
+    it (the confirmed pre-existing bug this session's "Fix both" work
+    closed -- a `post_loss_cg_baskets()` combined `normal_stcg` figure was
+    read directly by the Schedule-SI dispatch instead of a securities-only
+    figure)."""
+    land = _txn(
+        CGAssetType.LAND_BUILDING, D("2000000"), D("1000000"),
+        date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2026, 1, 15),
+    )
+    securities = _txn(
+        CGAssetType.UNLISTED_SHARES, D("700000"), D("500000"),
+        date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2026, 1, 15),
+    )
+    r = _compute(
+        "itr2", residential_status=ResidentialStatus.NON_RESIDENT,
+        filing_profile=_fii_filing_profile(), cg_transactions=[land, securities],
+    )
+    si = _si(r)
+    assert si["5ADii"].taxable_income == D("200000")
+    assert si["5ADii"].tax_amount == D("60000")
+    assert r.special_rate_tax == D("60000")
+    assert r.slab_tax > D("0")
 
 
 def test_fii_fpi_land_ltcg_second_proviso_never_applies_since_fii_implies_non_resident() -> None:

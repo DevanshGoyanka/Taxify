@@ -17,44 +17,19 @@ from decimal import Decimal
 from typing import Any
 
 from app.engine.itd.common import _to_rupees
-from app.engine.schedules.capital_gains import _is_short_term, _exemption_claim_total, deemed_consideration_50ca
+from app.engine.schedules.capital_gains import (
+    _is_short_term, _exemption_claim_total, deemed_consideration_50ca,
+    _GENERIC_OTHER_ASSET_TYPES, _FII_SECURITIES_ASSET_TYPES,
+)
 
 _ZERO = Decimal("0")
 
-# Schedule CG's generic "other assets" bucket (Sl. A6/B9 ITR-3; Sl. A5/B8
-# ITR-2). Kept here, not `itd/itr2.py`, since both forms' own formatters
-# need it and `itd/itr2.py` already imports FROM this module (not the
-# reverse) -- `itd/itr2.py` re-imports these two names from here so its
-# own existing internal references, and ITR-3's existing
-# ``from app.engine.itd.itr2 import ... as _ITR2_GENERIC_OTHER_ASSET_TYPES``
-# import, both keep working unchanged.
-_GENERIC_OTHER_ASSET_TYPES = frozenset({
-    "unlisted_shares",
-    "listed_security",
-    "debt_mutual_fund",
-    "specified_mutual_fund_50aa",
-    "market_linked_debenture_50aa",
-    "bonds_debentures",
-    "depreciable_asset",
-    "jewellery",
-    "foreign_asset",
-    "other",
-})
-
-# The subset of the generic "other assets" bucket that are genuinely
-# "securities" for section 115AD purposes (an FII/FPI's own gains on these
-# route to NRISecur115AD/NRIOnSec112and115Dtls instead of the ordinary
-# SaleOnOtherAssets/SaleofAssetNADtls -- ITR-2 only, since ITR-3 filers are
-# never FII/FPI). `jewellery`/`depreciable_asset`/`foreign_asset`/`other`
-# are NOT securities and always stay in the ordinary bucket.
-_FII_SECURITIES_ASSET_TYPES = frozenset({
-    "unlisted_shares",
-    "listed_security",
-    "debt_mutual_fund",
-    "specified_mutual_fund_50aa",
-    "market_linked_debenture_50aa",
-    "bonds_debentures",
-})
+# `_GENERIC_OTHER_ASSET_TYPES`/`_FII_SECURITIES_ASSET_TYPES` now live in
+# `capital_gains.py` (both the calculator and this disclosure layer need
+# them -- see that module's own docstring for the fix this move was part
+# of) and are re-imported here under the same names so every existing
+# reference in this file, `itd/itr2.py`'s re-import, and ITR-3's own
+# established import all keep working unchanged.
 
 
 def _is_actually_short_111a(tx: Any) -> bool:

@@ -53,6 +53,7 @@ from app.engine.schedules.capital_gains import (
     unquoted_shares_50ca_adjustment, _claim_total,
     ITR3_OTHER_ASSETS_ST_EXEMPTION_SECTIONS,
     ITR3_OTHER_ASSETS_LT_EXEMPTION_SECTIONS,
+    _FII_SECURITIES_ASSET_TYPES,
 )
 from app.engine.schedules.special_rates import (
     compute_112a_taxable as si_112a_taxable, compute_111a as si_111a,
@@ -316,6 +317,14 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     stcg_111a_val = z
     stcg_land_cg = []
     stcg_other = z
+    # Section 115AD(1)(ii): the genuinely "securities" (`_FII_SECURITIES_
+    # ASSET_TYPES`) subset of `stcg_other` -- tracked SEPARATELY (already
+    # included in `stcg_other`, not additive) so an FII/FPI's flat-30%
+    # basket can be routed correctly without also sweeping in land/
+    # building, business-only items (slump sale, deemed depreciable-asset
+    # STCG, unutilized-CGAS), or non-securities other assets, none of
+    # which section 115AD covers regardless of FII/FPI status.
+    stcg_fii_securities = z
     ltcg_112a_assets = []
     ltcg_land_cg = []
     ltcg_other_cg = z
@@ -439,8 +448,11 @@ def compute(input_data: ITR3Input) -> ITR3Result:
                 else ITR3_OTHER_ASSETS_LT_EXEMPTION_SECTIONS
             )
             gain = other_asset_gain(tx, is_short, valid_sections)
+            is_security = asset_type in _FII_SECURITIES_ASSET_TYPES
             if is_short:
                 stcg_other += gain
+                if is_security:
+                    stcg_fii_securities += gain
             else:
                 ltcg_other_cg += gain
 
@@ -453,7 +465,11 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # unquoted_shares_50ca_adjustment()'s own docstring for why a
     # per-transaction application would overstate the deemed
     # consideration whenever multiple unquoted-share sales exist).
-    stcg_other += unquoted_shares_50ca_adjustment(input_data.cg_transactions, is_short=True)
+    # "unlisted_shares" is itself a member of `_FII_SECURITIES_ASSET_TYPES`,
+    # so this entire delta belongs in the securities sub-total too.
+    _stcg_50ca_delta = unquoted_shares_50ca_adjustment(input_data.cg_transactions, is_short=True)
+    stcg_other += _stcg_50ca_delta
+    stcg_fii_securities += _stcg_50ca_delta
     ltcg_other_cg += unquoted_shares_50ca_adjustment(input_data.cg_transactions, is_short=False)
 
     # Schedule CG item A6e -- "Deemed short-term capital gains on
@@ -476,14 +492,14 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # Section 46A capital loss on buyback of shares (Schedule CG's
     # "CapitalLossBuyBackShares" block) is a genuine loss, not merely
     # disclosure -- it reduces the actual taxed STCG/LTCG total.
-    # `cg_buyback_loss_stcg30`/`cg_buyback_loss_stcg_applicable` both net
-    # into the SAME `stcg_other` accumulator here, which CYLA/BFLA below
-    # route AS ONE unit into either the flat-30% or "applicable rate"
-    # sub-basket depending on `is_fii_fpi` -- matching ITR-2's own
-    # identical (and identically imprecise for the rare case of BOTH
-    # fields populated with disagreeing intent) architecture exactly.
+    # `cg_buyback_loss_stcg30` is the taxpayer's own declared flat-30%
+    # (FII/FPI securities) buyback loss -- tracked into `stcg_fii_securities`
+    # too so it correctly nets against the flat-30% basket specifically,
+    # not the combined "other" bucket (2026-09-19 fix, matching ITR-2's
+    # own identical correction).
     stcg_111a_val += input_data.cg_buyback_loss_stcg20
     stcg_other += input_data.cg_buyback_loss_stcg30 + input_data.cg_buyback_loss_stcg_applicable
+    stcg_fii_securities += input_data.cg_buyback_loss_stcg30
     ltcg_other_cg += input_data.cg_buyback_loss_ltcg
 
     # Cross-form issue #11 (tracker): slump sale (A2/B2, section 50B) and
@@ -526,7 +542,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         ))
 
     stcg_result = compute_stcg(stcg_111a=stcg_111a_val, stcg_land_building=stcg_land_cg,
-                                stcg_other=stcg_other)
+                                stcg_other=stcg_other, stcg_fii_securities=stcg_fii_securities)
     ltcg_result = compute_ltcg(ltcg_112a_assets=ltcg_112a_assets, ltcg_land_building=ltcg_land_cg,
                                 ltcg_other=ltcg_other_cg, is_resident=is_resident_or_nor)
 
@@ -736,25 +752,30 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # special-rate 111A/112A tax, since Schedule SI entries were built from
     # RAW pre-loss values further down this function (fixed below, ## 16).
     #
-    # `income_30per` (land/building) + `income_app_rate` (generic other
-    # assets) form the SAME "other STCG" bucket ITR-2 splits on
-    # `is_fii_fpi` -- for an ordinary (non-FII/FPI) taxpayer this is
-    # genuinely slab-rate ("applicable rate"); for an FII/FPI it is the
-    # section 115AD(1)(ii) flat-30% basket instead (`stcg30`), matching
-    # ITR-2's own already-correct, live-UAT-tested split exactly. A real
-    # FII/FPI assessee never has land/building/generic-jewellery STCG
-    # blended into the same basket in practice (see this file's own
-    # `equity_111a_rows` precedent for the identical reasoning), so this
-    # is a safe, unconditional swap on `is_fii_fpi` alone, not a
-    # per-transaction asset-type split.
+    # `income_30per` (land/building + generic other assets, already
+    # inclusive of `income_fii_securities`) is genuinely slab-rate
+    # ("applicable rate") for an ordinary (non-FII/FPI) taxpayer. For an
+    # FII/FPI, ONLY the genuinely-"securities" subset (`income_fii_
+    # securities`, `_FII_SECURITIES_ASSET_TYPES`) is section 115AD(1)(ii)'s
+    # flat-30% basket (`stcg30`) -- land/building and non-securities other
+    # assets (jewellery/depreciable-asset STCG/slump sale/unutilized CGAS)
+    # are NEVER covered by that section regardless of FII/FPI status.
+    #
+    # CORRECTION (2026-09-19): an earlier version of this comment claimed
+    # "a real FII/FPI assessee never has land/building/generic-jewellery
+    # STCG blended into the same basket in practice", matching an
+    # equally-wrong claim ITR-2's own calculator made -- confirmed WRONG
+    # by direct computation: an FII/FPI-flagged return with ONLY a land/
+    # building STCG gain (no securities at all) was taxed at a flat 30%
+    # before this fix, which section 115AD does not support.
     stcg_111a_signed = stcg_result.income_111a
-    stcg_other_and_land = stcg_result.income_30per + stcg_result.income_app_rate
+    stcg_fii_securities_only = stcg_result.income_fii_securities
     if is_fii_fpi:
-        stcg_30_signed = stcg_other_and_land
-        stcg_app_signed = z
+        stcg_30_signed = stcg_fii_securities_only
+        stcg_app_signed = stcg_result.income_30per - stcg_fii_securities_only
     else:
         stcg_30_signed = z
-        stcg_app_signed = stcg_other_and_land
+        stcg_app_signed = stcg_result.income_30per
     stcg_dtaa_signed = stcg_result.income_dtaa
     ltcg_125_signed = ltcg_result.income_125per_other
     ltcg_112a_gross = ltcg_result.income_112a
@@ -963,16 +984,19 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # This basket is EXCLUDED from the ordinary slab-tax base automatically
     # once it has a real Schedule-SI entry (the same "no SI entry -> slab
     # rate" mechanism this calculator's own PTI dispatch already relies
-    # on). Ported verbatim from ITR-2's own already-correct, live-UAT-
-    # tested dispatch (calculators/itr2.py) -- `post_loss_cg["normal_stcg"]`
-    # mixes securities and non-securities asset types when both are present
-    # in the same return (Schedule CG disclosure's own item A5/A6 split is
-    # finer-grained than this basket), so the tax AMOUNT is correct
-    # regardless, but the SecCode attribution is only approximate in that
-    # mixed case -- same documented limitation as ITR-2's own identical
-    # comment.
-    if is_fii_fpi and post_loss_cg["normal_stcg"] > 0:
-        si_entries.append(compute_115ad_stcg_other(post_loss_cg["normal_stcg"]))
+    # on). Ported verbatim from ITR-2's own already-correct dispatch
+    # (calculators/itr2.py). Uses `normal_stcg_fii_securities` (the
+    # genuinely-securities SUBSET, `post_loss_cg_baskets()`'s own dedicated
+    # key), NOT the combined `normal_stcg` -- confirmed by direct
+    # computation (2026-09-19) that a mixed FII/FPI return (land/building
+    # + securities STCG together) was otherwise taxing the ENTIRE combined
+    # bucket at 30%, including the land/building portion section 115AD
+    # does not cover -- this was a real, confirmed bug in the first version
+    # of this dispatch (and in ITR-2's own already-shipped equivalent),
+    # not just a "SecCode attribution" approximation as an earlier version
+    # of this comment claimed.
+    if is_fii_fpi and post_loss_cg["normal_stcg_fii_securities"] > 0:
+        si_entries.append(compute_115ad_stcg_other(post_loss_cg["normal_stcg_fii_securities"]))
 
     if vda_income > 0:
         si_entries.append(si_vda(vda_income))
