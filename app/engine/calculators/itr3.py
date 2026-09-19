@@ -76,6 +76,24 @@ from app.engine.schedules.loss_setoff.bfla import (
 from app.engine.schedules.loss_setoff.cfl import compute as compute_cfl
 from app.engine.schedules.amt import compute as compute_amt, compute_amtc
 
+# Other-Sources-head Schedule SI sections this calculator dispatches
+# (`si_entries` loop below): lottery/game-show winnings (115BB),
+# unexplained income (68/69-series, 115BBE), patent royalty (115BBF).
+# These are Other Sources income taxed at a special rate rather than slab
+# rate -- they must be included in GTI/Total Income the same way
+# 111A/112/112A/VDA capital-gains special-rate income already is (see
+# `vda_income`/`cg_result` above), otherwise Total Income is understated
+# and the later `ti - si_result.total_special_rate_income` step (which
+# already subtracts this same total) removes income that was never added,
+# incorrectly zeroing GTI while tax is still charged on it. Mirrors
+# ITR-2's identical, already-shipped `_OS_HEAD_SI_SECTIONS`
+# (`calculators/itr2.py`) -- deliberately narrower for now, matching only
+# the three sections this calculator's own `si_entries` loop actually
+# dispatches (115BBG/115BBJ/115BBA/111/115E and the NRI/FII 5A-family
+# ITR-2 also supports have no ITR-3 schema/dispatch path yet -- a
+# documented, separately-scoped gap, not silently claimed closed here).
+_OS_HEAD_SI_SECTIONS = frozenset({"115BB", "115BBE", "115BBF"})
+
 
 @dataclass
 class ITR3Result:
@@ -726,6 +744,16 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     os_ = compute_os(input_data.other_sources_income, regime)
     r.other_sources_income = os_.income_chargeable
     r.schedules["os"] = os_
+    # See `_OS_HEAD_SI_SECTIONS` above -- Other-Sources-head special-rate
+    # income (lottery/unexplained-income/patent-royalty) must reach GTI
+    # here, the same way it's included via `si_entries` gross_income for
+    # the flat-rate tax dispatch below (`compute_lottery()`/`compute_115bbe()`/
+    # `compute_115bbf()`, ~line 1090) -- uses gross_income (not net of any
+    # deduction) to match exactly what those functions actually tax.
+    r.other_sources_income += sum(
+        (sie.gross_income for sie in (input_data.si_entries or []) if sie.section in _OS_HEAD_SI_SECTIONS),
+        z,
+    )
 
     # ── 6. Clubbing (SPI) ───────────────────────────────────────────────
     clubbing = z
